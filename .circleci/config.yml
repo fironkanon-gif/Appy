@@ -512,13 +512,18 @@ jobs:
 
             ARCHIVE="freetype-${FREETYPE_VERSION}.tar.gz"
 
-            echo "===== DOWNLOADING FREETYPE FROM OFFICIAL FREEDESKTOP SOURCE ====="
+            echo "===== DOWNLOADING FREETYPE FROM VERIFIED MIRRORS ====="
 
             wget \
               --tries=5 \
               --timeout=30 \
               -O "$CACHE_DIR/$ARCHIVE" \
-              "https://gitlab.freedesktop.org/freetype/freetype/-/archive/VER-${FREETYPE_VERSION}/freetype-VER-${FREETYPE_VERSION}.tar.gz"
+              "https://sourceforge.net/projects/freetype/files/freetype2/${FREETYPE_VERSION}/freetype-${FREETYPE_VERSION}.tar.gz/download" \
+            || wget \
+              --tries=5 \
+              --timeout=30 \
+              -O "$CACHE_DIR/$ARCHIVE" \
+              "https://download.savannah.gnu.org/releases/freetype/freetype-${FREETYPE_VERSION}.tar.gz"
 
             test -s "$CACHE_DIR/$ARCHIVE"
 
