@@ -122,7 +122,7 @@ jobs:
       # 5. CREATE PYTHON BUILD ENVIRONMENT
       # ============================================================
       - run:
-          name: Install Buildozer Cython and Pytest
+          name: Install Buildozer Cython Pytest and NumPy
           command: |
             set -eux
 
@@ -143,6 +143,12 @@ jobs:
             python -m pip install \
               pytest
 
+            # ======================================================
+            # NUMPY FOR PROJECT TESTS
+            # ======================================================
+            python -m pip install \
+              numpy
+
             python -m pip install \
               git+https://github.com/kivy/buildozer.git
 
@@ -150,7 +156,12 @@ jobs:
 
             python -m pip show Cython
             python -m pip show pytest
+            python -m pip show numpy
             python -m pip show buildozer
+
+            echo "===== VERIFY NUMPY ====="
+
+            python -c "import numpy; print('NumPy version:', numpy.__version__)"
 
             echo "===== VERSIONS ====="
 
@@ -170,7 +181,6 @@ jobs:
 
             test -f main.py
             test -f buildozer.spec
-
             test -f models/gothic_ocr.tflite
             test -f data/labels.json
 
@@ -215,6 +225,10 @@ jobs:
             set -eux
 
             source ~/buildozer-venv/bin/activate
+
+            echo "===== VERIFYING NUMPY BEFORE TESTS ====="
+
+            python -c "import numpy; print('NumPy is ready:', numpy.__version__)"
 
             echo "===== RUNNING PYTEST ====="
 
@@ -604,6 +618,9 @@ jobs:
             echo "===== PYTHON ====="
             python --version
 
+            echo "===== NUMPY ====="
+            python -c "import numpy; print(numpy.__version__)"
+
             echo "===== CYTHON ====="
             cython --version
 
@@ -638,11 +655,9 @@ jobs:
               "$ANDROIDSDK/build-tools/35.0.0/aidl"
 
             echo "===== FREETYPE ====="
-
             echo "$URL_freetype"
 
             echo "===== DISK ====="
-
             df -h
 
             echo "===== FINAL PYTEST ====="
@@ -707,6 +722,10 @@ jobs:
             echo "===== PYTHON ====="
 
             python --version
+
+            echo "===== NUMPY ====="
+
+            python -c "import numpy; print(numpy.__version__)"
 
             echo "===== CYTHON ====="
 
