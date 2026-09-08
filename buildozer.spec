@@ -7,7 +7,7 @@ version = 1.0.0
 
 source.dir = .
 
-source.include_exts = py,png,jpg,jpeg,webp,ttf,tflite,json,java
+source.include_exts = py,png,jpg,jpeg,webp,ttf,tflite,json
 
 source.exclude_dirs = tests,__pycache__,.buildozer,bin,.git
 
@@ -66,13 +66,6 @@ android.gradle_dependencies = org.tensorflow:tensorflow-lite:2.17.0
 
 
 # ============================================================
-# CUSTOM JAVA
-# ============================================================
-
-android.add_src = java
-
-
-# ============================================================
 # STORAGE
 # ============================================================
 
@@ -87,8 +80,7 @@ p4a.bootstrap = sdl2
 
 
 # ============================================================
-# IMPORTANT:
-# PYTHON 3.14 + CHARSET_NORMALIZER FIX
+# PYTHON / PYJUSNIUM COMPATIBILITY
 # ============================================================
 
 p4a.fork = kivy
