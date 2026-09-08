@@ -26,7 +26,7 @@ fullscreen = 0
 # ANDROID PERMISSIONS
 # ============================================================
 
-android.permissions = READ_EXTERNAL_STORAGE,READ_MEDIA_IMAGES
+android.permissions = CAMERA,READ_EXTERNAL_STORAGE,READ_MEDIA_IMAGES
 
 
 # ============================================================
