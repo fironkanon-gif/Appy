@@ -1,1062 +1,580 @@
 # ============================================================
-# GOTHIC OCR — TEXT DECODER
+# GOTHIC OCR — REAL DECODER TESTS
 # ============================================================
 
 from pathlib import Path
-import json
 
 import numpy as np
+import pytest
+
+from services.text_decoder import TextDecoder
 
 
-class TextDecoder:
-    """
-    فك مخرجات نموذج GothicOCR وتحويلها إلى:
-        - الحروف
-        - confidence
-        - bounding boxes
-        - الأسطر
-        - النص النهائي
+# ============================================================
+# HELPERS
+# ============================================================
 
-    يدعم أيضًا دمج نتائج متعددة قادمة من Tiles.
-    """
+ROOT = Path(__file__).resolve().parent.parent
+LABELS_PATH = ROOT / "data" / "labels.json"
 
-    INPUT_SIZE = 1024
-    NUM_CLASSES = 25
 
-    CONFIDENCE_THRESHOLD = 0.05
-    NMS_IOU_THRESHOLD = 0.45
+def make_detection(
+    class_id=0,
+    score=0.9,
+    box=(10.0, 10.0, 30.0, 30.0),
+    letter=None,
+):
+    if letter is None:
+        letter = str(class_id)
 
-    # ========================================================
-    # INIT
-    # ========================================================
+    return {
+        "class_id": class_id,
+        "letter": letter,
+        "score": score,
+        "box": box,
+    }
 
-    def __init__(
-        self,
-        labels_path=None,
-        confidence_threshold=None,
-        nms_iou_threshold=None,
-        space_threshold_factor=0.45,
-    ):
-        if labels_path is None:
-            labels_path = (
-                Path(__file__).resolve().parent.parent
-                / "data"
-                / "labels.json"
-            )
 
-        self.labels_path = Path(
-            labels_path
-        )
+@pytest.fixture
+def decoder():
+    return TextDecoder(
+        labels_path=LABELS_PATH
+    )
 
-        self.labels = self._load_labels()
 
-        self.confidence_threshold = (
-            float(confidence_threshold)
-            if confidence_threshold is not None
-            else self.CONFIDENCE_THRESHOLD
-        )
+# ============================================================
+# LABELS
+# ============================================================
 
-        self.nms_iou_threshold = (
-            float(nms_iou_threshold)
-            if nms_iou_threshold is not None
-            else self.NMS_IOU_THRESHOLD
-        )
+def test_labels_file_has_25_classes(decoder):
+    assert len(decoder.labels) == 25
 
-        self.space_threshold_factor = float(
-            space_threshold_factor
-        )
 
-        if not 0.0 <= self.confidence_threshold <= 1.0:
-            raise ValueError(
-                "confidence_threshold يجب أن يكون بين 0 و1."
-            )
+def test_labels_are_non_empty(decoder):
+    assert all(
+        isinstance(label, str)
+        and label.strip()
+        for label in decoder.labels
+    )
 
-        if not 0.0 <= self.nms_iou_threshold <= 1.0:
-            raise ValueError(
-                "nms_iou_threshold يجب أن يكون بين 0 و1."
-            )
 
-        if self.space_threshold_factor < 0.0:
-            raise ValueError(
-                "space_threshold_factor يجب أن يكون >= 0."
-            )
+# ============================================================
+# IOU
+# ============================================================
 
-    # ========================================================
-    # LOAD LABELS
-    # ========================================================
+def test_iou_identical_boxes(decoder):
+    box = (10, 10, 30, 30)
 
-    def _load_labels(self):
-        if not self.labels_path.is_file():
-            raise FileNotFoundError(
-                f"Labels file not found: "
-                f"{self.labels_path}"
-            )
+    assert decoder.iou(
+        box,
+        box,
+    ) == pytest.approx(1.0)
 
-        try:
-            with open(
-                self.labels_path,
-                "r",
-                encoding="utf-8",
-            ) as file:
-                labels = json.load(file)
 
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"Invalid JSON in labels file: "
-                f"{self.labels_path}"
-            ) from exc
+def test_iou_non_overlapping_boxes(decoder):
+    box_a = (0, 0, 10, 10)
+    box_b = (20, 20, 30, 30)
 
-        if not isinstance(labels, list):
-            raise ValueError(
-                "labels.json must contain a list."
-            )
-
-        if len(labels) != self.NUM_CLASSES:
-            raise ValueError(
-                f"Expected {self.NUM_CLASSES} labels, "
-                f"found {len(labels)}."
-            )
-
-        labels = [
-            str(label)
-            for label in labels
-        ]
-
-        if any(
-            not label
-            for label in labels
-        ):
-            raise ValueError(
-                "labels.json contains an empty label."
-            )
-
-        return labels
-
-    # ========================================================
-    # IOU
-    # ========================================================
-
-    @staticmethod
-    def iou(
+    assert decoder.iou(
         box_a,
         box_b,
+    ) == pytest.approx(0.0)
+
+
+def test_iou_partial_overlap(decoder):
+    box_a = (0, 0, 20, 20)
+    box_b = (10, 10, 30, 30)
+
+    # intersection = 100
+    # union = 700
+    expected = 100.0 / 700.0
+
+    assert decoder.iou(
+        box_a,
+        box_b,
+    ) == pytest.approx(
+        expected
+    )
+
+
+# ============================================================
+# NMS
+# ============================================================
+
+def test_nms_keeps_highest_confidence(
+    decoder,
+):
+    detections = [
+        make_detection(
+            class_id=0,
+            score=0.95,
+            box=(10, 10, 30, 30),
+        ),
+        make_detection(
+            class_id=0,
+            score=0.70,
+            box=(11, 11, 31, 31),
+        ),
+    ]
+
+    result = decoder.nms(
+        detections
+    )
+
+    assert len(result) == 1
+    assert result[0]["score"] == pytest.approx(
+        0.95
+    )
+
+
+def test_nms_keeps_different_classes(
+    decoder,
+):
+    detections = [
+        make_detection(
+            class_id=0,
+            score=0.90,
+            box=(10, 10, 30, 30),
+        ),
+        make_detection(
+            class_id=1,
+            score=0.85,
+            box=(11, 11, 31, 31),
+        ),
+    ]
+
+    result = decoder.nms(
+        detections
+    )
+
+    assert len(result) == 2
+
+
+def test_nms_keeps_non_overlapping_same_class(
+    decoder,
+):
+    detections = [
+        make_detection(
+            class_id=0,
+            score=0.90,
+            box=(0, 0, 20, 20),
+        ),
+        make_detection(
+            class_id=0,
+            score=0.85,
+            box=(40, 40, 60, 60),
+        ),
+    ]
+
+    result = decoder.nms(
+        detections
+    )
+
+    assert len(result) == 2
+
+
+def test_nms_empty_input(decoder):
+    assert decoder.nms([]) == []
+
+
+# ============================================================
+# SORTING
+# ============================================================
+
+def test_sort_detections_by_y_then_x(
+    decoder,
+):
+    detections = [
+        make_detection(
+            box=(100, 50, 120, 70),
+        ),
+        make_detection(
+            box=(20, 10, 40, 30),
+        ),
+        make_detection(
+            box=(50, 10, 70, 30),
+        ),
+    ]
+
+    result = decoder.sort_detections(
+        detections
+    )
+
+    assert result[0]["box"][0] == 20
+    assert result[1]["box"][0] == 50
+    assert result[2]["box"][0] == 100
+
+
+# ============================================================
+# BOX CONVERSION
+# ============================================================
+
+def test_normalized_box_conversion(
+    decoder,
+):
+    x, y, w, h = decoder._box_to_canvas(
+        0.5,
+        0.5,
+        0.25,
+        0.25,
+    )
+
+    assert x == pytest.approx(
+        512.0
+    )
+
+    assert y == pytest.approx(
+        512.0
+    )
+
+    assert w == pytest.approx(
+        256.0
+    )
+
+    assert h == pytest.approx(
+        256.0
+    )
+
+
+def test_pixel_box_conversion(
+    decoder,
+):
+    x, y, w, h = decoder._box_to_canvas(
+        512,
+        400,
+        100,
+        120,
+    )
+
+    assert x == pytest.approx(
+        512.0
+    )
+
+    assert y == pytest.approx(
+        400.0
+    )
+
+    assert w == pytest.approx(
+        100.0
+    )
+
+    assert h == pytest.approx(
+        120.0
+    )
+
+
+# ============================================================
+# COMPOSE RESULT
+# ============================================================
+
+def test_compose_result_empty(
+    decoder,
+):
+    result = decoder.compose_result(
+        []
+    )
+
+    assert result["text"] == ""
+    assert result["detections"] == []
+    assert result["lines"] == []
+
+
+def test_compose_result_orders_letters(
+    decoder,
+):
+    detections = [
+        make_detection(
+            class_id=0,
+            letter="A",
+            score=0.9,
+            box=(40, 10, 60, 30),
+        ),
+        make_detection(
+            class_id=1,
+            letter="B",
+            score=0.9,
+            box=(10, 10, 30, 30),
+        ),
+    ]
+
+    result = decoder.compose_result(
+        detections
+    )
+
+    assert result["text"] == "BA"
+
+
+# ============================================================
+# LINE GROUPING
+# ============================================================
+
+def test_group_lines_same_line(
+    decoder,
+):
+    detections = [
+        make_detection(
+            class_id=0,
+            letter="A",
+            box=(10, 10, 30, 30),
+        ),
+        make_detection(
+            class_id=1,
+            letter="B",
+            box=(40, 11, 60, 31),
+        ),
+    ]
+
+    lines = decoder._group_lines(
+        detections
+    )
+
+    assert len(lines) == 1
+    assert len(
+        lines[0]["items"]
+    ) == 2
+
+
+def test_group_lines_two_lines(
+    decoder,
+):
+    detections = [
+        make_detection(
+            class_id=0,
+            letter="A",
+            box=(10, 10, 30, 30),
+        ),
+        make_detection(
+            class_id=1,
+            letter="B",
+            box=(10, 100, 30, 120),
+        ),
+    ]
+
+    lines = decoder._group_lines(
+        detections
+    )
+
+    assert len(lines) == 2
+
+
+# ============================================================
+# WORD SPACING
+# ============================================================
+
+def test_build_text_adds_space_for_large_gap(
+    decoder,
+):
+    detections = [
+        make_detection(
+            class_id=0,
+            letter="A",
+            box=(10, 10, 30, 30),
+        ),
+        make_detection(
+            class_id=1,
+            letter="B",
+            box=(70, 10, 90, 30),
+        ),
+    ]
+
+    result = decoder.compose_result(
+        detections
+    )
+
+    assert result["text"] == "A B"
+
+
+def test_build_text_no_space_for_small_gap(
+    decoder,
+):
+    detections = [
+        make_detection(
+            class_id=0,
+            letter="A",
+            box=(10, 10, 30, 30),
+        ),
+        make_detection(
+            class_id=1,
+            letter="B",
+            box=(32, 10, 52, 30),
+        ),
+    ]
+
+    result = decoder.compose_result(
+        detections
+    )
+
+    assert result["text"] == "AB"
+
+
+# ============================================================
+# MERGING TILE RESULTS
+# ============================================================
+
+def test_merge_detections_removes_tile_duplicate(
+    decoder,
+):
+    """
+    محاكاة حرف ظهر في Tile 1 وTile 2
+    بسبب الـOverlap.
+    """
+
+    detections = [
+        make_detection(
+            class_id=0,
+            letter="A",
+            score=0.95,
+            box=(100, 100, 140, 140),
+        ),
+        make_detection(
+            class_id=0,
+            letter="A",
+            score=0.80,
+            box=(102, 102, 142, 142),
+        ),
+    ]
+
+    result = decoder.merge_detections(
+        detections
+    )
+
+    assert len(result) == 1
+    assert result[0]["score"] == pytest.approx(
+        0.95
+    )
+
+
+def test_merge_detections_preserves_different_letters(
+    decoder,
+):
+    detections = [
+        make_detection(
+            class_id=0,
+            letter="A",
+            score=0.95,
+            box=(100, 100, 140, 140),
+        ),
+        make_detection(
+            class_id=1,
+            letter="B",
+            score=0.90,
+            box=(102, 102, 142, 142),
+        ),
+    ]
+
+    result = decoder.merge_detections(
+        detections
+    )
+
+    assert len(result) == 2
+
+
+# ============================================================
+# DECODE OUTPUT VALIDATION
+# ============================================================
+
+def test_decode_rejects_invalid_image_size(
+    decoder,
+):
+    output = np.zeros(
+        (1, 29, 1),
+        dtype=np.float32,
+    )
+
+    with pytest.raises(
+        ValueError
     ):
-        ax1, ay1, ax2, ay2 = box_a
-        bx1, by1, bx2, by2 = box_b
-
-        ix1 = max(
-            ax1,
-            bx1,
-        )
-
-        iy1 = max(
-            ay1,
-            by1,
-        )
-
-        ix2 = min(
-            ax2,
-            bx2,
-        )
-
-        iy2 = min(
-            ay2,
-            by2,
-        )
-
-        iw = max(
-            0.0,
-            ix2 - ix1,
-        )
-
-        ih = max(
-            0.0,
-            iy2 - iy1,
-        )
-
-        intersection = (
-            iw * ih
-        )
-
-        area_a = (
-            max(0.0, ax2 - ax1)
-            * max(0.0, ay2 - ay1)
-        )
-
-        area_b = (
-            max(0.0, bx2 - bx1)
-            * max(0.0, by2 - by1)
-        )
-
-        union = (
-            area_a
-            + area_b
-            - intersection
-        )
-
-        if union <= 0.0:
-            return 0.0
-
-        return (
-            intersection / union
-        )
-
-    # ========================================================
-    # NMS
-    # ========================================================
-
-    def nms(
-        self,
-        detections,
-    ):
-        """
-        Class-aware Non-Maximum Suppression.
-
-        يتم تطبيق NMS لكل class بشكل مستقل حتى لا يتم
-        حذف حرف صحيح لمجرد أنه قريب من حرف آخر مختلف.
-        """
-
-        if not detections:
-            return []
-
-        class_groups = {}
-
-        for detection in detections:
-
-            class_id = int(
-                detection["class_id"]
-            )
-
-            class_groups.setdefault(
-                class_id,
-                [],
-            ).append(
-                detection
-            )
-
-        kept = []
-
-        for group in class_groups.values():
-
-            group = sorted(
-                group,
-                key=lambda d: float(
-                    d["score"]
-                ),
-                reverse=True,
-            )
-
-            while group:
-
-                best = group.pop(0)
-
-                kept.append(
-                    best
-                )
-
-                remaining = []
-
-                for other in group:
-
-                    overlap = self.iou(
-                        best["box"],
-                        other["box"],
-                    )
-
-                    if (
-                        overlap
-                        < self.nms_iou_threshold
-                    ):
-                        remaining.append(
-                            other
-                        )
-
-                group = remaining
-
-        return self.sort_detections(
-            kept
-        )
-
-    # ========================================================
-    # SORT DETECTIONS
-    # ========================================================
-
-    @staticmethod
-    def sort_detections(
-        detections,
-    ):
-        return sorted(
-            detections,
-            key=lambda d: (
-                (
-                    d["box"][1]
-                    + d["box"][3]
-                )
-                / 2.0,
-                d["box"][0],
-            ),
-        )
-
-    # ========================================================
-    # BOX FORMAT
-    # ========================================================
-
-    def _box_to_canvas(
-        self,
-        x,
-        y,
-        w,
-        h,
-    ):
-        values = np.array(
-            [
-                x,
-                y,
-                w,
-                h,
-            ],
-            dtype=np.float32,
-        )
-
-        # ----------------------------------------------------
-        # Normalized YOLO-style coordinates
-        # ----------------------------------------------------
-
-        if np.all(
-            np.abs(values) <= 1.5
-        ):
-
-            canvas_x = (
-                x * self.INPUT_SIZE
-            )
-
-            canvas_y = (
-                y * self.INPUT_SIZE
-            )
-
-            canvas_w = (
-                w * self.INPUT_SIZE
-            )
-
-            canvas_h = (
-                h * self.INPUT_SIZE
-            )
-
-        # ----------------------------------------------------
-        # Pixel coordinates
-        # ----------------------------------------------------
-
-        else:
-
-            canvas_x = x
-            canvas_y = y
-            canvas_w = w
-            canvas_h = h
-
-        return (
-            float(canvas_x),
-            float(canvas_y),
-            float(canvas_w),
-            float(canvas_h),
-        )
-
-    # ========================================================
-    # DECODE MODEL OUTPUT
-    # ========================================================
-
-    def decode(
-        self,
-        output,
-        original_width,
-        original_height,
-        scale,
-        pad_x,
-        pad_y,
-    ):
-        """
-        تحويل خرج TFLite إلى detections داخل الصورة الأصلية.
-        """
-
-        original_width = int(
-            original_width
-        )
-
-        original_height = int(
-            original_height
-        )
-
-        scale = float(
-            scale
-        )
-
-        pad_x = float(
-            pad_x
-        )
-
-        pad_y = float(
-            pad_y
-        )
-
-        if (
-            original_width <= 0
-            or original_height <= 0
-        ):
-            raise ValueError(
-                "original_width and "
-                "original_height must be > 0."
-            )
-
-        if (
-            not np.isfinite(scale)
-            or scale <= 0
-        ):
-            raise ValueError(
-                f"Invalid image scale: "
-                f"{scale}"
-            )
-
-        if not np.isfinite(
-            [pad_x, pad_y]
-        ).all():
-            raise ValueError(
-                "pad_x/pad_y contain invalid values."
-            )
-
-        output = np.asarray(
-            output,
-            dtype=np.float32,
-        )
-
-        if not np.all(
-            np.isfinite(output)
-        ):
-            raise ValueError(
-                "Model output contains NaN or Inf."
-            )
-
-        # ====================================================
-        # REMOVE BATCH DIMENSION
-        # ====================================================
-
-        if output.ndim == 3:
-
-            if output.shape[0] != 1:
-                raise ValueError(
-                    "Expected batch size 1, "
-                    f"got shape {output.shape}"
-                )
-
-            output = output[0]
-
-        if output.ndim != 2:
-            raise ValueError(
-                f"Unexpected output shape: "
-                f"{output.shape}"
-            )
-
-        # ====================================================
-        # CHANNEL FORMAT
-        # ====================================================
-
-        expected_channels = (
-            4 + self.NUM_CLASSES
-        )
-
-        if (
-            output.shape[0]
-            == expected_channels
-        ):
-
-            predictions = output
-
-        elif (
-            output.shape[1]
-            == expected_channels
-        ):
-
-            predictions = output.T
-
-        else:
-
-            raise ValueError(
-                "Expected one output dimension "
-                f"to contain {expected_channels} "
-                f"channels. Got: {output.shape}"
-            )
-
-        # ====================================================
-        # SPLIT OUTPUT
-        # ====================================================
-
-        boxes = predictions[:4]
-
-        class_scores = predictions[
-            4 : 4 + self.NUM_CLASSES
-        ]
-
-        scores = np.max(
-            class_scores,
-            axis=0,
-        )
-
-        class_ids = np.argmax(
-            class_scores,
-            axis=0,
-        )
-
-        # ====================================================
-        # CONFIDENCE FILTER
-        # ====================================================
-
-        positions = np.where(
-            np.isfinite(scores)
-            & (
-                scores
-                >= self.confidence_threshold
-            )
-        )[0]
-
-        detections = []
-
-        # ====================================================
-        # DECODE BOXES
-        # ====================================================
-
-        for position in positions:
-
-            x = float(
-                boxes[
-                    0,
-                    position,
-                ]
-            )
-
-            y = float(
-                boxes[
-                    1,
-                    position,
-                ]
-            )
-
-            w = float(
-                boxes[
-                    2,
-                    position,
-                ]
-            )
-
-            h = float(
-                boxes[
-                    3,
-                    position,
-                ]
-            )
-
-            score = float(
-                scores[position]
-            )
-
-            class_id = int(
-                class_ids[position]
-            )
-
-            # ------------------------------------------------
-            # VALIDATION
-            # ------------------------------------------------
-
-            if not np.isfinite(
-                [
-                    x,
-                    y,
-                    w,
-                    h,
-                    score,
-                ]
-            ).all():
-                continue
-
-            if w <= 0.0 or h <= 0.0:
-                continue
-
-            if not (
-                0 <= class_id
-                < len(self.labels)
-            ):
-                continue
-
-            # ------------------------------------------------
-            # CANVAS COORDINATES
-            # ------------------------------------------------
-
-            (
-                canvas_x,
-                canvas_y,
-                canvas_w,
-                canvas_h,
-            ) = self._box_to_canvas(
-                x,
-                y,
-                w,
-                h,
-            )
-
-            # ------------------------------------------------
-            # CENTER -> CORNERS
-            # ------------------------------------------------
-
-            canvas_x1 = (
-                canvas_x
-                - canvas_w / 2.0
-            )
-
-            canvas_y1 = (
-                canvas_y
-                - canvas_h / 2.0
-            )
-
-            canvas_x2 = (
-                canvas_x
-                + canvas_w / 2.0
-            )
-
-            canvas_y2 = (
-                canvas_y
-                + canvas_h / 2.0
-            )
-
-            # ------------------------------------------------
-            # REMOVE LETTERBOX
-            # ------------------------------------------------
-
-            x1 = (
-                canvas_x1
-                - pad_x
-            ) / scale
-
-            y1 = (
-                canvas_y1
-                - pad_y
-            ) / scale
-
-            x2 = (
-                canvas_x2
-                - pad_x
-            ) / scale
-
-            y2 = (
-                canvas_y2
-                - pad_y
-            ) / scale
-
-            # ------------------------------------------------
-            # CLIP TO SOURCE IMAGE
-            # ------------------------------------------------
-
-            x1 = float(
-                np.clip(
-                    x1,
-                    0.0,
-                    float(original_width),
-                )
-            )
-
-            y1 = float(
-                np.clip(
-                    y1,
-                    0.0,
-                    float(original_height),
-                )
-            )
-
-            x2 = float(
-                np.clip(
-                    x2,
-                    0.0,
-                    float(original_width),
-                )
-            )
-
-            y2 = float(
-                np.clip(
-                    y2,
-                    0.0,
-                    float(original_height),
-                )
-            )
-
-            if (
-                x2 <= x1
-                or y2 <= y1
-            ):
-                continue
-
-            detections.append(
-                {
-                    "class_id": class_id,
-                    "letter": self.labels[
-                        class_id
-                    ],
-                    "score": score,
-                    "box": (
-                        x1,
-                        y1,
-                        x2,
-                        y2,
-                    ),
-                }
-            )
-
-        # ====================================================
-        # NMS
-        # ====================================================
-
-        detections = self.nms(
-            detections
-        )
-
-        # ====================================================
-        # BUILD RESULT
-        # ====================================================
-
-        return self.compose_result(
-            detections
-        )
-
-    # ========================================================
-    # GROUP LINES
-    # ========================================================
-
-    def _group_lines(
-        self,
-        detections,
-    ):
-        if not detections:
-            return []
-
-        vertical = sorted(
-            detections,
-            key=lambda d: (
-                d["box"][1]
-                + d["box"][3]
-            )
-            / 2.0,
-        )
-
-        lines = []
-
-        for detection in vertical:
-
-            x1, y1, x2, y2 = (
-                detection["box"]
-            )
-
-            center_y = (
-                y1 + y2
-            ) / 2.0
-
-            height = max(
-                1.0,
-                y2 - y1,
-            )
-
-            best_line = None
-
-            best_distance = (
-                float("inf")
-            )
-
-            for line in lines:
-
-                line_center_y = (
-                    line["center_y"]
-                )
-
-                average_height = (
-                    line["avg_height"]
-                )
-
-                tolerance = max(
-                    height * 0.50,
-                    average_height * 0.60,
-                    8.0,
-                )
-
-                distance = abs(
-                    center_y
-                    - line_center_y
-                )
-
-                if (
-                    distance
-                    <= tolerance
-                    and distance
-                    < best_distance
-                ):
-
-                    best_distance = (
-                        distance
-                    )
-
-                    best_line = line
-
-            if best_line is not None:
-
-                best_line[
-                    "items"
-                ].append(
-                    detection
-                )
-
-                count = len(
-                    best_line["items"]
-                )
-
-                best_line[
-                    "total_y_sum"
-                ] += center_y
-
-                best_line[
-                    "total_h_sum"
-                ] += height
-
-                best_line[
-                    "center_y"
-                ] = (
-                    best_line[
-                        "total_y_sum"
-                    ]
-                    / count
-                )
-
-                best_line[
-                    "avg_height"
-                ] = (
-                    best_line[
-                        "total_h_sum"
-                    ]
-                    / count
-                )
-
-            else:
-
-                lines.append(
-                    {
-                        "center_y": float(
-                            center_y
-                        ),
-                        "avg_height": float(
-                            height
-                        ),
-                        "total_y_sum": float(
-                            center_y
-                        ),
-                        "total_h_sum": float(
-                            height
-                        ),
-                        "items": [
-                            detection
-                        ],
-                    }
-                )
-
-        lines.sort(
-            key=lambda line:
-            line["center_y"]
-        )
-
-        for line in lines:
-
-            line["items"].sort(
-                key=lambda d:
-                d["box"][0]
-            )
-
-        return lines
-
-    # ========================================================
-    # BUILD TEXT FROM LINES
-    # ========================================================
-
-    def _build_text(
-        self,
-        lines,
-    ):
-        text_lines = []
-
-        for line in lines:
-
-            items = line["items"]
-
-            if not items:
-                continue
-
-            items.sort(
-                key=lambda d:
-                d["box"][0]
-            )
-
-            line_chars = []
-
-            for index, detection in enumerate(
-                items
-            ):
-
-                line_chars.append(
-                    detection["letter"]
-                )
-
-                # --------------------------------------------
-                # WORD GAP
-                # --------------------------------------------
-
-                if (
-                    index
-                    < len(items) - 1
-                ):
-
-                    next_detection = (
-                        items[index + 1]
-                    )
-
-                    current_x2 = (
-                        detection["box"][2]
-                    )
-
-                    next_x1 = (
-                        next_detection[
-                            "box"
-                        ][0]
-                    )
-
-                    gap = (
-                        next_x1
-                        - current_x2
-                    )
-
-                    current_width = (
-                        detection["box"][2]
-                        - detection["box"][0]
-                    )
-
-                    next_width = (
-                        next_detection[
-                            "box"
-                        ][2]
-                        - next_detection[
-                            "box"
-                        ][0]
-                    )
-
-                    average_width = (
-                        current_width
-                        + next_width
-                    ) / 2.0
-
-                    if gap > (
-                        average_width
-                        * self.space_threshold_factor
-                    ):
-                        line_chars.append(
-                            " "
-                        )
-
-            line_text = "".join(
-                line_chars
-            )
-
-            if line_text.strip():
-                text_lines.append(
-                    line_text
-                )
-
-        return "\n".join(
-            text_lines
-        )
-
-    # ========================================================
-    # COMPOSE RESULT
-    # ========================================================
-
-    def compose_result(
-        self,
-        detections,
-    ):
-        """
-        بناء النتيجة من detections موجودة مسبقًا.
-
-        هذه الدالة مهمة جدًا عند دمج نتائج عدة Tiles.
-        """
-
-        if detections is None:
-            detections = []
-
-        detections = list(
-            detections
-        )
-
-        detections = self.sort_detections(
-            detections
-        )
-
-        lines = self._group_lines(
-            detections
-        )
-
-        text = self._build_text(
-            lines
-        )
-
-        return {
-            "text": text,
-            "detections": detections,
-            "lines": lines,
-        }
-
-    # ========================================================
-    # MERGE TILE RESULTS
-    # ========================================================
-
-    def merge_detections(
-        self,
-        detections,
-    ):
-        """
-        دمج detections القادمة من عدة Tiles
-        ثم تطبيق Global NMS.
-
-        الاستخدام:
-            final = decoder.merge_detections(
-                all_detections
-            )
-        """
-
-        if not detections:
-            return []
-
-        return self.nms(
-            list(detections)
-        )
-
-    # ========================================================
-    # DECODE TEXT ONLY
-    # ========================================================
-
-    def decode_text(
-        self,
-        output,
-        original_width,
-        original_height,
-        scale,
-        pad_x,
-        pad_y,
-    ):
-        result = self.decode(
+        decoder.decode(
             output=output,
-            original_width=original_width,
-            original_height=original_height,
-            scale=scale,
-            pad_x=pad_x,
-            pad_y=pad_y,
+            original_width=0,
+            original_height=100,
+            scale=1.0,
+            pad_x=0.0,
+            pad_y=0.0,
         )
 
-        return result["text"]
+
+def test_decode_rejects_invalid_scale(
+    decoder,
+):
+    output = np.zeros(
+        (1, 29, 1),
+        dtype=np.float32,
+    )
+
+    with pytest.raises(
+        ValueError
+    ):
+        decoder.decode(
+            output=output,
+            original_width=100,
+            original_height=100,
+            scale=0.0,
+            pad_x=0.0,
+            pad_y=0.0,
+        )
+
+
+def test_decode_rejects_nan_output(
+    decoder,
+):
+    output = np.zeros(
+        (1, 29, 1),
+        dtype=np.float32,
+    )
+
+    output[0, 0, 0] = np.nan
+
+    with pytest.raises(
+        ValueError
+    ):
+        decoder.decode(
+            output=output,
+            original_width=100,
+            original_height=100,
+            scale=1.0,
+            pad_x=0.0,
+            pad_y=0.0,
+        )
+
+
+# ============================================================
+# REALISTIC OUTPUT SHAPE
+# ============================================================
+
+def test_decode_accepts_model_output_shape(
+    decoder,
+):
+    """
+    اختبار أن decoder يتعامل مع شكل
+    نموذج GothicOCR الحقيقي.
+
+    لا نفترض أن النموذج سيكتشف حرفًا؛
+    نختبر فقط صحة الشكل والمسار.
+    """
+
+    output = np.zeros(
+        (1, 29, 21504),
+        dtype=np.float32,
+    )
+
+    result = decoder.decode(
+        output=output,
+        original_width=1024,
+        original_height=1024,
+        scale=1.0,
+        pad_x=0.0,
+        pad_y=0.0,
+    )
+
+    assert isinstance(
+        result,
+        dict,
+    )
+
+    assert "text" in result
+    assert "detections" in result
+    assert "lines" in result
+
+    assert result["text"] == ""
+    assert result["detections"] == []
