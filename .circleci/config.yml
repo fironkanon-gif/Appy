@@ -281,20 +281,22 @@ jobs:
             sdkmanager \
               "platform-tools" \
               "platforms;android-35" \
-              "build-tools;35.0.0"
+              "build-tools;35.0.0" \
+              "cmdline-tools;latest"
 
             echo "=== Android SDK setup completed ==="
 
-            echo "===== INSTALLED SDK COMPONENTS ====="
+            echo "===== VERIFYING SDK COMPONENTS ====="
 
             test -d "$ANDROIDSDK/platform-tools"
             test -d "$ANDROIDSDK/platforms/android-35"
             test -d "$ANDROIDSDK/build-tools/35.0.0"
+            test -f "$ANDROIDSDK/cmdline-tools/latest/bin/sdkmanager"
 
-            echo "===== SDK PACKAGES VERIFIED ====="
+            echo "===== INSTALLED SDK COMPONENTS ====="
 
             sdkmanager --list_installed 2>/dev/null | grep -E \
-              "platform-tools|platforms;android-35|build-tools;35.0.0" || true
+              "platform-tools|platforms;android-35|build-tools;35.0.0|cmdline-tools" || true
 
 
       # ============================================================
@@ -343,6 +345,26 @@ jobs:
               "$ANDROIDNDK" \
               ~/.buildozer/android/platform/android-ndk-r28c
 
+            echo "===== FIX SDKMANAGER FOR JAVA 17 ====="
+
+            MODERN_SDKMANAGER="$ANDROIDSDK/cmdline-tools/latest/bin/sdkmanager"
+
+            test -f "$MODERN_SDKMANAGER"
+
+            mkdir -p \
+              "$ANDROIDSDK/tools/bin"
+
+            rm -f \
+              "$ANDROIDSDK/tools/bin/sdkmanager"
+
+            ln -s \
+              "$MODERN_SDKMANAGER" \
+              "$ANDROIDSDK/tools/bin/sdkmanager"
+
+            echo "===== VERIFY MODERN SDKMANAGER ====="
+
+            "$ANDROIDSDK/tools/bin/sdkmanager" --version
+
             echo "===== BUILDOZER ANDROID LINKS ====="
 
             ls -la ~/.buildozer/android/platform
@@ -356,6 +378,11 @@ jobs:
 
             test -f \
               ~/.buildozer/android/platform/android-sdk/build-tools/35.0.0/aidl
+
+            echo "===== SDKMANAGER LINK ====="
+
+            ls -la \
+              ~/.buildozer/android/platform/android-sdk/tools/bin/sdkmanager
 
 
       # ============================================================
@@ -413,6 +440,14 @@ jobs:
             test -f \
               "$ANDROIDSDK/build-tools/35.0.0/aidl"
 
+            echo "===== MODERN SDKMANAGER ====="
+            test -f \
+              "$ANDROIDSDK/cmdline-tools/latest/bin/sdkmanager"
+
+            echo "===== BUILDOZER SDKMANAGER ====="
+            test -L \
+              "$ANDROIDSDK/tools/bin/sdkmanager"
+
             echo "===== DISK ====="
             df -h
 
@@ -457,6 +492,10 @@ jobs:
             python --version
             cython --version
             buildozer --version
+
+            echo "===== SDKMANAGER BEING USED ====="
+
+            "$ANDROIDSDK/tools/bin/sdkmanager" --version
 
             echo "===== START BUILD ====="
 
