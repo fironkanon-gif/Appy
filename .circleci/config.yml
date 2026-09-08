@@ -301,17 +301,45 @@ jobs:
       # ============================================================
       # 12. CLEAN OLD BUILD
       # ============================================================
+    # ============================================================
+      # 12. CLEAN OLD BUILD AND CACHES
+      # ============================================================
       - run:
-          name: Clean old Android build
+          name: Clean old Android build and caches
           command: |
             set -eux
 
-            source ~/buildozer-venv/bin/activate
-
+            echo "===== REMOVE OLD APK ====="
             rm -rf bin
 
-            echo "Old APK output removed."
+            echo "===== REMOVE PROJECT BUILDOZER CACHE ====="
+            rm -rf .buildozer
 
+            echo "===== REMOVE USER BUILDOZER CACHE ====="
+            rm -rf ~/.buildozer
+
+            echo "===== REMOVE GRADLE CACHE ====="
+            rm -rf ~/.gradle/caches
+            rm -rf ~/.gradle/daemon
+
+            echo "===== REMOVE PYTHON CACHE ====="
+            find . \
+              -type d \
+              -name "__pycache__" \
+              -prune \
+              -exec rm -rf {} +
+
+            find . \
+              -type f \
+              -name "*.pyc" \
+              -delete
+
+            echo "===== VERIFY CLEANUP ====="
+
+            test ! -d .buildozer
+            test ! -d bin
+
+            echo "===== CACHE CLEANUP COMPLETED ====="
 
       # ============================================================
       # 13. BUILD APK
