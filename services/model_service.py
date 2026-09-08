@@ -16,16 +16,41 @@ class GothicOCR:
     خدمة تشغيل نموذج Gothic OCR.
 
     المسؤوليات:
-    1. تحميل الصورة الأصلية.
-    2. تقسيم الصور الكبيرة إلى Tiles.
-    3. تشغيل TFLite على كل Tile.
-    4. تحويل الإحداثيات إلى الصورة الأصلية.
-    5. دمج النتائج وإزالة التكرارات.
-    6. بناء النص النهائي.
+    1. تحميل النموذج.
+    2. تجهيز الصورة.
+    3. تقسيم الصور الكبيرة إلى Tiles.
+    4. تشغيل TFLite على كل Tile.
+    5. تحويل الإحداثيات إلى الصورة الأصلية.
+    6. دمج النتائج وإزالة التكرارات.
+    7. بناء النص النهائي.
     """
+
+    # ========================================================
+    # MODEL SPEC
+    # ========================================================
+
+    INPUT_SHAPE = (
+        1,
+        1024,
+        1024,
+        3,
+    )
+
+    OUTPUT_SHAPE = (
+        1,
+        29,
+        21504,
+    )
+
+    INPUT_DTYPE = np.float32
+    OUTPUT_DTYPE = np.float32
 
     TILE_SIZE = 1024
     TILE_OVERLAP = 0.15
+
+    # ========================================================
+    # INITIALIZATION
+    # ========================================================
 
     def __init__(
         self,
@@ -38,10 +63,9 @@ class GothicOCR:
 
         if not self.model_path.exists():
             raise FileNotFoundError(
-                f"Model not found: {self.model_path}"
+                f"TFLite model not found: "
+                f"{self.model_path}"
             )
-
-        self.image_service = ImageService()
 
         if labels_path is None:
             labels_path = (
@@ -50,31 +74,55 @@ class GothicOCR:
                 / "labels.json"
             )
 
-        self.decoder = TextDecoder(
-            labels_path=labels_path
+        self.labels_path = Path(
+            labels_path
         )
 
-        self._interpreter = None
+        if not self.labels_path.exists():
+            raise FileNotFoundError(
+                f"Labels file not found: "
+                f"{self.labels_path}"
+            )
+
+        self.image_service = (
+            ImageService()
+        )
+
+        self.decoder = TextDecoder(
+            labels_path=self.labels_path
+        )
+
+        self.interpreter = None
+
         self._input_details = None
         self._output_details = None
+
+        self.input_shape = None
+        self.output_shape = None
+
+        self.input_bytes = 0
+        self.output_bytes = 0
+
+        self._ByteBuffer = None
+        self._ByteOrder = None
 
         self._lock = threading.Lock()
 
         self._closed = False
 
     # ========================================================
-    # MODEL INITIALIZATION
+    # LOAD TFLITE
     # ========================================================
 
     def _load_interpreter(self):
         """
-        تحميل TensorFlow Lite Interpreter.
+        تحميل TensorFlow Lite.
 
-        على Android:
-        يستخدم TFLiteBridge إذا كان متاحًا.
+        Android:
+            PyJNIus + org.tensorflow.lite.Interpreter
 
-        على Desktop:
-        يستخدم tensorflow.lite.Interpreter.
+        Desktop:
+            tensorflow.lite.Interpreter
         """
 
         if self._closed:
@@ -82,42 +130,89 @@ class GothicOCR:
                 "GothicOCR is already closed."
             )
 
-        if self._interpreter is not None:
+        if self.interpreter is not None:
             return
 
-        # ----------------------------------------------------
-        # Android / Java Bridge
-        # ----------------------------------------------------
+        # ====================================================
+        # ANDROID / PYJNIUS
+        # ====================================================
 
         try:
             from jnius import autoclass
 
-            TFLiteBridge = autoclass(
-                "org.gothicocr.TFLiteBridge"
+            File = autoclass(
+                "java.io.File"
             )
 
-            self._interpreter = TFLiteBridge(
-                str(self.model_path)
+            Interpreter = autoclass(
+                "org.tensorflow.lite.Interpreter"
             )
+
+            ByteBuffer = autoclass(
+                "java.nio.ByteBuffer"
+            )
+
+            ByteOrder = autoclass(
+                "java.nio.ByteOrder"
+            )
+
+            interpreter = Interpreter(
+                File(
+                    str(
+                        self.model_path
+                    )
+                )
+
+            )
+
+            self.interpreter = (
+                interpreter
+            )
+
+            self._ByteBuffer = (
+                ByteBuffer
+            )
+
+            self._ByteOrder = (
+                ByteOrder
+            )
+
+            self._read_model_shape_android()
 
             return
 
-        except Exception:
-            # إذا لم يكن Android bridge متاحًا
-            # ننتقل إلى TensorFlow Lite العادي.
+        except ImportError:
             pass
 
-        # ----------------------------------------------------
-        # Desktop fallback
-        # ----------------------------------------------------
+        except Exception as error:
+            # إذا كان PyJNIus موجودًا ولكن
+            # TensorFlow Lite Java غير متاح،
+            # نحاول Desktop fallback.
+            self.interpreter = None
+
+            self._ByteBuffer = None
+            self._ByteOrder = None
+
+            android_error = error
+
+        # ====================================================
+        # DESKTOP FALLBACK
+        # ====================================================
 
         try:
             import tensorflow as tf
 
-        except ImportError as exc:
+        except ImportError as error:
+            if "android_error" in locals():
+                raise RuntimeError(
+                    "TensorFlow Lite is not available. "
+                    f"Android error: {android_error}"
+                ) from error
+
             raise RuntimeError(
-                "TensorFlow Lite runtime is not available."
-            ) from exc
+                "TensorFlow Lite runtime "
+                "is not available."
+            ) from error
 
         interpreter = (
             tf.lite.Interpreter(
@@ -129,7 +224,9 @@ class GothicOCR:
 
         interpreter.allocate_tensors()
 
-        self._interpreter = interpreter
+        self.interpreter = (
+            interpreter
+        )
 
         self._input_details = (
             interpreter.get_input_details()
@@ -138,6 +235,368 @@ class GothicOCR:
         self._output_details = (
             interpreter.get_output_details()
         )
+
+        self.input_shape = tuple(
+            int(v)
+            for v in
+            self._input_details[0][
+                "shape"
+            ]
+        )
+
+        self.output_shape = tuple(
+            int(v)
+            for v in
+            self._output_details[0][
+                "shape"
+            ]
+        )
+
+        self._validate_model_shape()
+
+    # ========================================================
+    # ANDROID MODEL SHAPE
+    # ========================================================
+
+    def _read_model_shape_android(self):
+        """
+        قراءة شكل Tensor من Android TFLite.
+        """
+
+        input_tensor = (
+            self.interpreter
+            .getInputTensor(0)
+        )
+
+        output_tensor = (
+            self.interpreter
+            .getOutputTensor(0)
+        )
+
+        self.input_shape = tuple(
+            int(v)
+            for v in
+            input_tensor.shape()
+        )
+
+        self.output_shape = tuple(
+            int(v)
+            for v in
+            output_tensor.shape()
+        )
+
+        self._validate_model_shape()
+
+        self.input_bytes = (
+            int(
+                np.prod(
+                    self.input_shape
+                )
+            )
+            * np.dtype(
+                self.INPUT_DTYPE
+            ).itemsize
+        )
+
+        self.output_bytes = (
+            int(
+                np.prod(
+                    self.output_shape
+                )
+            )
+            * np.dtype(
+                self.OUTPUT_DTYPE
+            ).itemsize
+        )
+
+    # ========================================================
+    # MODEL VALIDATION
+    # ========================================================
+
+    def _validate_model_shape(self):
+        """
+        التأكد أن النموذج هو نموذج GothicOCR المتوقع.
+        """
+
+        if tuple(
+            self.input_shape
+        ) != self.INPUT_SHAPE:
+
+            raise ValueError(
+                "Unexpected TFLite input shape: "
+                f"{self.input_shape}; "
+                f"expected {self.INPUT_SHAPE}"
+            )
+
+        if tuple(
+            self.output_shape
+        ) != self.OUTPUT_SHAPE:
+
+            raise ValueError(
+                "Unexpected TFLite output shape: "
+                f"{self.output_shape}; "
+                f"expected {self.OUTPUT_SHAPE}"
+            )
+
+        self.input_bytes = (
+            int(
+                np.prod(
+                    self.INPUT_SHAPE
+                )
+            )
+            * np.dtype(
+                self.INPUT_DTYPE
+            ).itemsize
+        )
+
+        self.output_bytes = (
+            int(
+                np.prod(
+                    self.OUTPUT_SHAPE
+                )
+            )
+            * np.dtype(
+                self.OUTPUT_DTYPE
+            ).itemsize
+        )
+
+    # ========================================================
+    # INPUT VALIDATION
+    # ========================================================
+
+    def _prepare_input(
+        self,
+        tile_input,
+    ):
+        """
+        تجهيز Tile لتطابق TensorFlow Lite.
+        """
+
+        array = np.asarray(
+            tile_input,
+            dtype=self.INPUT_DTYPE,
+        )
+
+        if array.shape != (
+            self.INPUT_SHAPE
+        ):
+            raise ValueError(
+                "Invalid TFLite input shape: "
+                f"{array.shape}; "
+                f"expected {self.INPUT_SHAPE}"
+            )
+
+        if not np.isfinite(
+            array
+        ).all():
+            raise ValueError(
+                "Input tensor contains "
+                "NaN or infinite values."
+            )
+
+        if not array.flags.c_contiguous:
+            array = np.ascontiguousarray(
+                array
+            )
+
+        return array
+
+    # ========================================================
+    # DIRECT BYTE BUFFER
+    # ========================================================
+
+    def _new_direct_buffer(
+        self,
+        size_bytes,
+    ):
+        """
+        إنشاء Direct ByteBuffer.
+        """
+
+        if (
+            self._ByteBuffer is None
+            or self._ByteOrder is None
+        ):
+            raise RuntimeError(
+                "Java ByteBuffer is not available."
+            )
+
+        buffer = (
+            self._ByteBuffer
+            .allocateDirect(
+                int(size_bytes)
+            )
+        )
+
+        buffer.order(
+            self._ByteOrder
+            .nativeOrder()
+        )
+
+        return buffer
+
+    # ========================================================
+    # ANDROID INFERENCE
+    # ========================================================
+
+    def _run_android(
+        self,
+        input_data,
+    ):
+        """
+        تشغيل TFLite على Android
+        باستخدام Direct ByteBuffers.
+        """
+
+        input_data = (
+            self._prepare_input(
+                input_data
+            )
+        )
+
+        raw_input = (
+            input_data.tobytes(
+                order="C"
+            )
+        )
+
+        if len(
+            raw_input
+        ) != self.input_bytes:
+
+            raise ValueError(
+                "Input byte size mismatch: "
+                f"{len(raw_input)} != "
+                f"{self.input_bytes}"
+            )
+
+        input_buffer = (
+            self._new_direct_buffer(
+                self.input_bytes
+            )
+        )
+
+        output_buffer = (
+            self._new_direct_buffer(
+                self.output_bytes
+            )
+        )
+
+        try:
+            # كتابة الإدخال
+            input_buffer.put(
+                raw_input
+            )
+
+            input_buffer.rewind()
+
+            # تشغيل النموذج
+            self.interpreter.run(
+                input_buffer,
+                output_buffer,
+            )
+
+            # قراءة الناتج
+            output_buffer.rewind()
+
+            raw_output = bytearray(
+                self.output_bytes
+            )
+
+            output_buffer.get(
+                raw_output
+            )
+
+        finally:
+            input_buffer = None
+            output_buffer = None
+
+        output = np.frombuffer(
+            raw_output,
+            dtype=self.OUTPUT_DTYPE,
+        ).copy()
+
+        output = output.reshape(
+            self.OUTPUT_SHAPE
+        )
+
+        if not np.isfinite(
+            output
+        ).all():
+            raise ValueError(
+                "TFLite output contains "
+                "NaN or infinite values."
+            )
+
+        return output
+
+    # ========================================================
+    # DESKTOP INFERENCE
+    # ========================================================
+
+    def _run_desktop(
+        self,
+        input_data,
+    ):
+        """
+        تشغيل TFLite على Desktop.
+        """
+
+        input_data = (
+            self._prepare_input(
+                input_data
+            )
+        )
+
+        input_index = (
+            self._input_details[0][
+                "index"
+            ]
+        )
+
+        output_index = (
+            self._output_details[0][
+                "index"
+            ]
+        )
+
+        self.interpreter.set_tensor(
+            input_index,
+            input_data,
+        )
+
+        self.interpreter.invoke()
+
+        output = (
+            self.interpreter
+            .get_tensor(
+                output_index
+            )
+        )
+
+        output = np.asarray(
+            output,
+            dtype=self.OUTPUT_DTYPE,
+        )
+
+        if output.shape != (
+            self.OUTPUT_SHAPE
+        ):
+            raise ValueError(
+                "Unexpected model output: "
+                f"{output.shape}; "
+                f"expected {self.OUTPUT_SHAPE}"
+            )
+
+        if not np.isfinite(
+            output
+        ).all():
+            raise ValueError(
+                "TFLite output contains "
+                "NaN or infinite values."
+            )
+
+        return output
 
     # ========================================================
     # SINGLE TILE INFERENCE
@@ -153,121 +612,17 @@ class GothicOCR:
 
         self._load_interpreter()
 
-        # ----------------------------------------------------
-        # Android bridge
-        # ----------------------------------------------------
-
-        if self._is_android_bridge():
-
-            return self._predict_android(
+        if self._ByteBuffer is not None:
+            return self._run_android(
                 tile_input
             )
 
-        # ----------------------------------------------------
-        # Desktop TFLite
-        # ----------------------------------------------------
-
-        interpreter = (
-            self._interpreter
-        )
-
-        input_index = (
-            self._input_details[0]["index"]
-        )
-
-        output_index = (
-            self._output_details[0]["index"]
-        )
-
-        interpreter.set_tensor(
-            input_index,
-            tile_input,
-        )
-
-        interpreter.invoke()
-
-        output = interpreter.get_tensor(
-            output_index
-        )
-
-        return np.asarray(
-            output,
-            dtype=np.float32,
+        return self._run_desktop(
+            tile_input
         )
 
     # ========================================================
-    # ANDROID
-    # ========================================================
-
-    def _is_android_bridge(self):
-        """
-        التحقق من أن الـinterpreter هو Java Bridge.
-        """
-
-        return not hasattr(
-            self._interpreter,
-            "set_tensor",
-        )
-
-    def _predict_android(
-        self,
-        tile_input,
-    ):
-        """
-        تشغيل النموذج من خلال TFLiteBridge.
-
-        نحول الإدخال إلى float32 contiguous
-        ثم نرسله إلى Java.
-        """
-
-        array = np.asarray(
-            tile_input,
-            dtype=np.float32,
-        )
-
-        array = np.ascontiguousarray(
-            array
-        )
-
-        # ----------------------------------------------------
-        # محاولة الواجهات المحتملة للـBridge
-        # ----------------------------------------------------
-
-        if hasattr(
-            self._interpreter,
-            "run"
-        ):
-            output = (
-                self._interpreter.run(
-                    array
-                )
-            )
-
-        elif hasattr(
-            self._interpreter,
-            "predict"
-        ):
-            output = (
-                self._interpreter.predict(
-                    array
-                )
-            )
-
-        else:
-            raise RuntimeError(
-                "TFLiteBridge does not expose "
-                "a supported inference method."
-            )
-
-        output = np.asarray(
-            output,
-            dtype=np.float32,
-        )
-
-        return output
-
-    # ========================================================
-    # MOVE DETECTIONS TO SOURCE IMAGE
+    # MOVE DETECTIONS
     # ========================================================
 
     @staticmethod
@@ -277,8 +632,8 @@ class GothicOCR:
         offset_y,
     ):
         """
-        تحويل Box من إحداثيات Tile
-        إلى إحداثيات الصورة الأصلية.
+        نقل إحداثيات Detection من Tile
+        إلى الصورة الأصلية.
         """
 
         moved = []
@@ -289,7 +644,10 @@ class GothicOCR:
                 "box"
             )
 
-            if not box or len(box) != 4:
+            if (
+                not box
+                or len(box) != 4
+            ):
                 continue
 
             x1, y1, x2, y2 = box
@@ -299,10 +657,18 @@ class GothicOCR:
             )
 
             updated["box"] = (
-                float(x1 + offset_x),
-                float(y1 + offset_y),
-                float(x2 + offset_x),
-                float(y2 + offset_y),
+                float(
+                    x1 + offset_x
+                ),
+                float(
+                    y1 + offset_y
+                ),
+                float(
+                    x2 + offset_x
+                ),
+                float(
+                    y2 + offset_y
+                ),
             )
 
             moved.append(
@@ -312,7 +678,7 @@ class GothicOCR:
         return moved
 
     # ========================================================
-    # TILE COUNT
+    # TILE POSITIONS
     # ========================================================
 
     def _axis_positions(
@@ -321,11 +687,6 @@ class GothicOCR:
     ):
         """
         حساب مواقع Tiles على محور واحد.
-
-        نفس منطق ImageService:
-        - يبدأ من 0.
-        - يستخدم overlap.
-        - يضمن تغطية الطرف الأخير.
         """
 
         tile = self.TILE_SIZE
@@ -379,7 +740,9 @@ class GothicOCR:
                 next_position
             )
 
-            current = next_position
+            current = (
+                next_position
+            )
 
         return positions
 
@@ -388,21 +751,18 @@ class GothicOCR:
         width,
         height,
     ):
-        x_count = len(
-            self._axis_positions(
-                width
-            )
-        )
-
-        y_count = len(
-            self._axis_positions(
-                height
-            )
-        )
-
         return (
-            x_count
-            * y_count
+            len(
+                self._axis_positions(
+                    width
+                )
+            )
+            *
+            len(
+                self._axis_positions(
+                    height
+                )
+            )
         )
 
     # ========================================================
@@ -415,13 +775,13 @@ class GothicOCR:
         progress_callback=None,
     ):
         """
-        تحليل صورة كاملة.
+        تحليل الصورة كاملة.
 
         الصور الصغيرة:
             Tile واحدة.
 
         الصور الكبيرة:
-            عدة Tiles مع overlap.
+            عدة Tiles مع Overlap.
 
         progress_callback:
             callback(current_tile, total_tiles)
@@ -434,15 +794,28 @@ class GothicOCR:
                     "GothicOCR is already closed."
                 )
 
+            # -----------------------------------------------
+            # Load original image
+            # -----------------------------------------------
+
             image = (
-                self.image_service.load_rgb(
+                self.image_service
+                .load_rgb(
                     image_path
                 )
             )
 
-            original_height, original_width = (
-                image.shape[:2]
+            original_height = (
+                image.shape[0]
             )
+
+            original_width = (
+                image.shape[1]
+            )
+
+            # -----------------------------------------------
+            # Tile count
+            # -----------------------------------------------
 
             total_tiles = (
                 self._count_tiles(
@@ -455,16 +828,13 @@ class GothicOCR:
 
             tiles_processed = 0
 
-            # =================================================
-            # IMPORTANT:
-            # لا نستخدم list(iter_tiles(...))
-            #
-            # لأن ذلك يحتفظ بكل الـTiles في الذاكرة
-            # في نفس الوقت.
-            # =================================================
+            # -----------------------------------------------
+            # Process one Tile at a time
+            # -----------------------------------------------
 
             for tile in (
-                self.image_service.iter_tiles(
+                self.image_service
+                .iter_tiles(
                     image,
                     overlap=self.TILE_OVERLAP,
                     tile_size=self.TILE_SIZE,
@@ -473,9 +843,9 @@ class GothicOCR:
 
                 tiles_processed += 1
 
-                # ---------------------------------------------
+                # -------------------------------------------
                 # Inference
-                # ---------------------------------------------
+                # -------------------------------------------
 
                 output = (
                     self._predict_tile(
@@ -483,9 +853,9 @@ class GothicOCR:
                     )
                 )
 
-                # ---------------------------------------------
-                # Decode Tile
-                # ---------------------------------------------
+                # -------------------------------------------
+                # Decode
+                # -------------------------------------------
 
                 meta = tile["meta"]
 
@@ -510,15 +880,16 @@ class GothicOCR:
                     )
                 )
 
-                detections = decoded.get(
-                    "detections",
-                    [],
+                detections = (
+                    decoded.get(
+                        "detections",
+                        [],
+                    )
                 )
 
-                # ---------------------------------------------
-                # Move Tile coordinates
-                # → Original image coordinates
-                # ---------------------------------------------
+                # -------------------------------------------
+                # Convert Tile → Original image
+                # -------------------------------------------
 
                 moved = (
                     self._move_detections_to_source(
@@ -532,9 +903,9 @@ class GothicOCR:
                     moved
                 )
 
-                # ---------------------------------------------
+                # -------------------------------------------
                 # Progress
-                # ---------------------------------------------
+                # -------------------------------------------
 
                 if progress_callback:
 
@@ -545,20 +916,25 @@ class GothicOCR:
                         )
 
                     except Exception:
-                        # Progress UI must never
-                        # break OCR itself.
+                        # UI progress must never
+                        # interrupt OCR.
                         pass
+
+            # -----------------------------------------------
+            # Before global NMS
+            # -----------------------------------------------
 
             detections_before_nms = len(
                 all_detections
             )
 
-            # =================================================
-            # GLOBAL MERGE
-            # =================================================
+            # -----------------------------------------------
+            # Global merge
+            # -----------------------------------------------
 
             final_detections = (
-                self.decoder.merge_detections(
+                self.decoder
+                .merge_detections(
                     all_detections
                 )
             )
@@ -567,19 +943,20 @@ class GothicOCR:
                 final_detections
             )
 
-            # =================================================
-            # FINAL TEXT
-            # =================================================
+            # -----------------------------------------------
+            # Final result
+            # -----------------------------------------------
 
             result = (
-                self.decoder.compose_result(
+                self.decoder
+                .compose_result(
                     final_detections
                 )
             )
 
-            # =================================================
-            # EXTRA INFORMATION
-            # =================================================
+            # -----------------------------------------------
+            # Statistics
+            # -----------------------------------------------
 
             result.update(
                 {
@@ -607,21 +984,42 @@ class GothicOCR:
             return result
 
     # ========================================================
-    # CLOSE
+    # CLEANUP
     # ========================================================
 
     def close(self):
         """
-        تحرير الموارد.
+        تحرير موارد TFLite.
         """
 
         with self._lock:
 
-            self._closed = True
+            interpreter = getattr(
+                self,
+                "interpreter",
+                None,
+            )
 
-            self._interpreter = None
+            if interpreter is not None:
+
+                try:
+                    interpreter.close()
+
+                except Exception:
+                    pass
+
+            self.interpreter = None
+
             self._input_details = None
             self._output_details = None
+
+            self._ByteBuffer = None
+            self._ByteOrder = None
+
+            self.input_shape = None
+            self.output_shape = None
+
+            self._closed = True
 
     # ========================================================
     # CONTEXT MANAGER
