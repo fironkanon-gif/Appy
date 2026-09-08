@@ -1,1029 +1,797 @@
 # ============================================================
 # GOTHIC OCR — MODEL SERVICE
+# TFLite + Android PyJNIus + Tiling + NMS + Cache
 # ============================================================
 
 from pathlib import Path
+import copy
 import threading
 
 import numpy as np
 
 from services.image_service import ImageService
 from services.text_decoder import TextDecoder
+from services.cache_service import OCRCache
 
 
 class GothicOCR:
     """
-    خدمة تشغيل نموذج Gothic OCR.
+    Main OCR inference service.
 
-    المسؤوليات:
-    1. تحميل النموذج.
-    2. تجهيز الصورة.
-    3. تقسيم الصور الكبيرة إلى Tiles.
-    4. تشغيل TFLite على كل Tile.
-    5. تحويل الإحداثيات إلى الصورة الأصلية.
-    6. دمج النتائج وإزالة التكرارات.
-    7. بناء النص النهائي.
+    Features:
+    - TensorFlow Lite
+    - Android PyJNIus support
+    - Desktop TensorFlow fallback
+    - NHWC input: [1, 1024, 1024, 3]
+    - Tiling for large images
+    - Global NMS
+    - Text reconstruction
+    - Persistent OCR cache
     """
 
-    # ========================================================
-    # MODEL SPEC
-    # ========================================================
+    INPUT_SIZE = 1024
+    EXPECTED_INPUT_SHAPE = (1, 1024, 1024, 3)
+    EXPECTED_OUTPUT_SHAPE = (1, 29, 21504)
 
-    INPUT_SHAPE = (
-        1,
-        1024,
-        1024,
-        3,
-    )
-
-    OUTPUT_SHAPE = (
-        1,
-        29,
-        21504,
-    )
-
-    INPUT_DTYPE = np.float32
-    OUTPUT_DTYPE = np.float32
-
-    TILE_SIZE = 1024
     TILE_OVERLAP = 0.15
 
-    # ========================================================
-    # INITIALIZATION
-    # ========================================================
+    # Changing this invalidates previous OCR cache entries.
+    CACHE_VERSION = "gothicocr-v2-tile1024-overlap15"
 
     def __init__(
         self,
-        model_path,
+        model_path=None,
         labels_path=None,
+        cache_dir=None,
+        cache_enabled=True,
     ):
-        self.model_path = Path(
-            model_path
-        )
+        self._lock = threading.RLock()
+        self._closed = False
+
+        base_dir = Path(__file__).resolve().parent.parent
+
+        if model_path is None:
+            model_path = base_dir / "models" / "gothic_ocr.tflite"
+
+        if labels_path is None:
+            labels_path = base_dir / "data" / "labels.json"
+
+        self.model_path = Path(model_path)
+        self.labels_path = Path(labels_path)
 
         if not self.model_path.exists():
             raise FileNotFoundError(
-                f"TFLite model not found: "
-                f"{self.model_path}"
+                f"TFLite model not found: {self.model_path}"
             )
-
-        if labels_path is None:
-            labels_path = (
-                self.model_path.parent.parent
-                / "data"
-                / "labels.json"
-            )
-
-        self.labels_path = Path(
-            labels_path
-        )
 
         if not self.labels_path.exists():
             raise FileNotFoundError(
-                f"Labels file not found: "
-                f"{self.labels_path}"
+                f"Labels file not found: {self.labels_path}"
             )
 
-        self.image_service = (
-            ImageService()
-        )
+        # --------------------------------------------------------
+        # Image + decoder services
+        # --------------------------------------------------------
+
+        self.image_service = ImageService()
 
         self.decoder = TextDecoder(
             labels_path=self.labels_path
         )
 
+        # --------------------------------------------------------
+        # Cache
+        # --------------------------------------------------------
+
+        self.cache_enabled = bool(cache_enabled)
+
+        if self.cache_enabled:
+            self.cache = OCRCache(
+                cache_dir=cache_dir,
+                version=self.CACHE_VERSION,
+            )
+        else:
+            self.cache = None
+
+        # --------------------------------------------------------
+        # TFLite interpreter
+        # --------------------------------------------------------
+
         self.interpreter = None
+        self._android_interpreter = False
 
-        self._input_details = None
-        self._output_details = None
+        self._load_interpreter()
 
-        self.input_shape = None
-        self.output_shape = None
-
-        self.input_bytes = 0
-        self.output_bytes = 0
-
-        self._ByteBuffer = None
-        self._ByteOrder = None
-
-        self._lock = threading.Lock()
-
-        self._closed = False
-
-    # ========================================================
-    # LOAD TFLITE
-    # ========================================================
+    # ============================================================
+    # INTERPRETER
+    # ============================================================
 
     def _load_interpreter(self):
         """
-        تحميل TensorFlow Lite.
+        Load TensorFlow Lite interpreter.
 
         Android:
-            PyJNIus + org.tensorflow.lite.Interpreter
+            org.tensorflow.lite.Interpreter
 
         Desktop:
             tensorflow.lite.Interpreter
         """
 
-        if self._closed:
-            raise RuntimeError(
-                "GothicOCR is already closed."
-            )
-
-        if self.interpreter is not None:
-            return
-
-        # ====================================================
-        # ANDROID / PYJNIUS
-        # ====================================================
+        # --------------------------------------------------------
+        # Android / PyJNIus
+        # --------------------------------------------------------
 
         try:
             from jnius import autoclass
-
-            File = autoclass(
-                "java.io.File"
-            )
 
             Interpreter = autoclass(
                 "org.tensorflow.lite.Interpreter"
             )
 
-            ByteBuffer = autoclass(
-                "java.nio.ByteBuffer"
+            FileInputStream = autoclass(
+                "java.io.FileInputStream"
             )
 
-            ByteOrder = autoclass(
-                "java.nio.ByteOrder"
+            FileChannelMapMode = autoclass(
+                "java.nio.channels.FileChannel$MapMode"
             )
 
-            interpreter = Interpreter(
-                File(
-                    str(
-                        self.model_path
-                    )
-                )
-
+            RandomAccessFile = autoclass(
+                "java.io.RandomAccessFile"
             )
 
-            self.interpreter = (
-                interpreter
+            model_file = RandomAccessFile(
+                str(self.model_path),
+                "r",
             )
 
-            self._ByteBuffer = (
-                ByteBuffer
+            channel = model_file.getChannel()
+
+            mapped_buffer = channel.map(
+                FileChannelMapMode.READ_ONLY,
+                0,
+                self.model_path.stat().st_size,
             )
 
-            self._ByteOrder = (
-                ByteOrder
+            self.interpreter = Interpreter(
+                mapped_buffer
             )
 
-            self._read_model_shape_android()
+            self._android_interpreter = True
+
+            model_file.close()
+
+            self._validate_android_interpreter()
 
             return
 
-        except ImportError:
-            pass
-
-        except Exception as error:
-            # إذا كان PyJNIus موجودًا ولكن
-            # TensorFlow Lite Java غير متاح،
-            # نحاول Desktop fallback.
+        except Exception:
             self.interpreter = None
+            self._android_interpreter = False
 
-            self._ByteBuffer = None
-            self._ByteOrder = None
-
-            android_error = error
-
-        # ====================================================
-        # DESKTOP FALLBACK
-        # ====================================================
+        # --------------------------------------------------------
+        # Desktop fallback
+        # --------------------------------------------------------
 
         try:
             import tensorflow as tf
 
-        except ImportError as error:
-            if "android_error" in locals():
-                raise RuntimeError(
-                    "TensorFlow Lite is not available. "
-                    f"Android error: {android_error}"
-                ) from error
+            self.interpreter = tf.lite.Interpreter(
+                model_path=str(self.model_path)
+            )
 
+            self.interpreter.allocate_tensors()
+
+            self._validate_desktop_interpreter()
+
+        except ImportError as exc:
             raise RuntimeError(
-                "TensorFlow Lite runtime "
-                "is not available."
-            ) from error
+                "TensorFlow Lite interpreter could not be loaded. "
+                "On Android, make sure TensorFlow Lite and PyJNIus "
+                "are available."
+            ) from exc
 
-        interpreter = (
-            tf.lite.Interpreter(
-                model_path=str(
-                    self.model_path
-                )
-            )
-        )
-
-        interpreter.allocate_tensors()
-
-        self.interpreter = (
-            interpreter
-        )
-
-        self._input_details = (
-            interpreter.get_input_details()
-        )
-
-        self._output_details = (
-            interpreter.get_output_details()
-        )
-
-        self.input_shape = tuple(
-            int(v)
-            for v in
-            self._input_details[0][
-                "shape"
-            ]
-        )
-
-        self.output_shape = tuple(
-            int(v)
-            for v in
-            self._output_details[0][
-                "shape"
-            ]
-        )
-
-        self._validate_model_shape()
-
-    # ========================================================
-    # ANDROID MODEL SHAPE
-    # ========================================================
-
-    def _read_model_shape_android(self):
-        """
-        قراءة شكل Tensor من Android TFLite.
-        """
-
-        input_tensor = (
-            self.interpreter
-            .getInputTensor(0)
-        )
-
-        output_tensor = (
-            self.interpreter
-            .getOutputTensor(0)
-        )
-
-        self.input_shape = tuple(
-            int(v)
-            for v in
-            input_tensor.shape()
-        )
-
-        self.output_shape = tuple(
-            int(v)
-            for v in
-            output_tensor.shape()
-        )
-
-        self._validate_model_shape()
-
-        self.input_bytes = (
-            int(
-                np.prod(
-                    self.input_shape
-                )
-            )
-            * np.dtype(
-                self.INPUT_DTYPE
-            ).itemsize
-        )
-
-        self.output_bytes = (
-            int(
-                np.prod(
-                    self.output_shape
-                )
-            )
-            * np.dtype(
-                self.OUTPUT_DTYPE
-            ).itemsize
-        )
-
-    # ========================================================
-    # MODEL VALIDATION
-    # ========================================================
-
-    def _validate_model_shape(self):
-        """
-        التأكد أن النموذج هو نموذج GothicOCR المتوقع.
-        """
-
-        if tuple(
-            self.input_shape
-        ) != self.INPUT_SHAPE:
-
-            raise ValueError(
-                "Unexpected TFLite input shape: "
-                f"{self.input_shape}; "
-                f"expected {self.INPUT_SHAPE}"
-            )
-
-        if tuple(
-            self.output_shape
-        ) != self.OUTPUT_SHAPE:
-
-            raise ValueError(
-                "Unexpected TFLite output shape: "
-                f"{self.output_shape}; "
-                f"expected {self.OUTPUT_SHAPE}"
-            )
-
-        self.input_bytes = (
-            int(
-                np.prod(
-                    self.INPUT_SHAPE
-                )
-            )
-            * np.dtype(
-                self.INPUT_DTYPE
-            ).itemsize
-        )
-
-        self.output_bytes = (
-            int(
-                np.prod(
-                    self.OUTPUT_SHAPE
-                )
-            )
-            * np.dtype(
-                self.OUTPUT_DTYPE
-            ).itemsize
-        )
-
-    # ========================================================
-    # INPUT VALIDATION
-    # ========================================================
-
-    def _prepare_input(
-        self,
-        tile_input,
-    ):
-        """
-        تجهيز Tile لتطابق TensorFlow Lite.
-        """
-
-        array = np.asarray(
-            tile_input,
-            dtype=self.INPUT_DTYPE,
-        )
-
-        if array.shape != (
-            self.INPUT_SHAPE
-        ):
-            raise ValueError(
-                "Invalid TFLite input shape: "
-                f"{array.shape}; "
-                f"expected {self.INPUT_SHAPE}"
-            )
-
-        if not np.isfinite(
-            array
-        ).all():
-            raise ValueError(
-                "Input tensor contains "
-                "NaN or infinite values."
-            )
-
-        if not array.flags.c_contiguous:
-            array = np.ascontiguousarray(
-                array
-            )
-
-        return array
-
-    # ========================================================
-    # DIRECT BYTE BUFFER
-    # ========================================================
-
-    def _new_direct_buffer(
-        self,
-        size_bytes,
-    ):
-        """
-        إنشاء Direct ByteBuffer.
-        """
-
-        if (
-            self._ByteBuffer is None
-            or self._ByteOrder is None
-        ):
+        except Exception as exc:
             raise RuntimeError(
-                "Java ByteBuffer is not available."
-            )
+                f"Failed to load TFLite model: {exc}"
+            ) from exc
 
-        buffer = (
-            self._ByteBuffer
-            .allocateDirect(
-                int(size_bytes)
-            )
+    # ============================================================
+    # VALIDATION
+    # ============================================================
+
+    def _validate_android_interpreter(self):
+        """Validate Android TFLite tensors."""
+
+        input_tensor = self.interpreter.getInputTensor(0)
+        output_tensor = self.interpreter.getOutputTensor(0)
+
+        input_shape = tuple(
+            int(x)
+            for x in input_tensor.shape()
         )
 
-        buffer.order(
-            self._ByteOrder
-            .nativeOrder()
+        output_shape = tuple(
+            int(x)
+            for x in output_tensor.shape()
         )
 
-        return buffer
+        if input_shape != self.EXPECTED_INPUT_SHAPE:
+            raise RuntimeError(
+                f"Unexpected model input shape: "
+                f"{input_shape}. "
+                f"Expected {self.EXPECTED_INPUT_SHAPE}."
+            )
 
-    # ========================================================
-    # ANDROID INFERENCE
-    # ========================================================
+        if output_shape != self.EXPECTED_OUTPUT_SHAPE:
+            raise RuntimeError(
+                f"Unexpected model output shape: "
+                f"{output_shape}. "
+                f"Expected {self.EXPECTED_OUTPUT_SHAPE}."
+            )
 
-    def _run_android(
-        self,
-        input_data,
-    ):
+    def _validate_desktop_interpreter(self):
+        """Validate desktop TFLite tensors."""
+
+        inputs = self.interpreter.get_input_details()
+        outputs = self.interpreter.get_output_details()
+
+        if not inputs:
+            raise RuntimeError("Model has no input tensor.")
+
+        if not outputs:
+            raise RuntimeError("Model has no output tensor.")
+
+        input_shape = tuple(
+            int(x)
+            for x in inputs[0]["shape"]
+        )
+
+        output_shape = tuple(
+            int(x)
+            for x in outputs[0]["shape"]
+        )
+
+        if input_shape != self.EXPECTED_INPUT_SHAPE:
+            raise RuntimeError(
+                f"Unexpected model input shape: "
+                f"{input_shape}. "
+                f"Expected {self.EXPECTED_INPUT_SHAPE}."
+            )
+
+        if output_shape != self.EXPECTED_OUTPUT_SHAPE:
+            raise RuntimeError(
+                f"Unexpected model output shape: "
+                f"{output_shape}. "
+                f"Expected {self.EXPECTED_OUTPUT_SHAPE}."
+            )
+
+    # ============================================================
+    # SINGLE TENSOR INFERENCE
+    # ============================================================
+
+    def _run_single_android(self, tensor):
         """
-        تشغيل TFLite على Android
-        باستخدام Direct ByteBuffers.
-        """
-
-        input_data = (
-            self._prepare_input(
-                input_data
-            )
-        )
-
-        raw_input = (
-            input_data.tobytes(
-                order="C"
-            )
-        )
-
-        if len(
-            raw_input
-        ) != self.input_bytes:
-
-            raise ValueError(
-                "Input byte size mismatch: "
-                f"{len(raw_input)} != "
-                f"{self.input_bytes}"
-            )
-
-        input_buffer = (
-            self._new_direct_buffer(
-                self.input_bytes
-            )
-        )
-
-        output_buffer = (
-            self._new_direct_buffer(
-                self.output_bytes
-            )
-        )
-
-        try:
-            # كتابة الإدخال
-            input_buffer.put(
-                raw_input
-            )
-
-            input_buffer.rewind()
-
-            # تشغيل النموذج
-            self.interpreter.run(
-                input_buffer,
-                output_buffer,
-            )
-
-            # قراءة الناتج
-            output_buffer.rewind()
-
-            raw_output = bytearray(
-                self.output_bytes
-            )
-
-            output_buffer.get(
-                raw_output
-            )
-
-        finally:
-            input_buffer = None
-            output_buffer = None
-
-        output = np.frombuffer(
-            raw_output,
-            dtype=self.OUTPUT_DTYPE,
-        ).copy()
-
-        output = output.reshape(
-            self.OUTPUT_SHAPE
-        )
-
-        if not np.isfinite(
-            output
-        ).all():
-            raise ValueError(
-                "TFLite output contains "
-                "NaN or infinite values."
-            )
-
-        return output
-
-    # ========================================================
-    # DESKTOP INFERENCE
-    # ========================================================
-
-    def _run_desktop(
-        self,
-        input_data,
-    ):
-        """
-        تشغيل TFLite على Desktop.
+        Run one 1024x1024 tensor on Android.
         """
 
-        input_data = (
-            self._prepare_input(
-                input_data
+        input_tensor = self.interpreter.getInputTensor(0)
+        output_tensor = self.interpreter.getOutputTensor(0)
+
+        input_dtype = str(
+            input_tensor.dataType()
+        )
+
+        output_dtype = str(
+            output_tensor.dataType()
+        )
+
+        if "FLOAT32" not in input_dtype:
+            raise RuntimeError(
+                f"Expected FLOAT32 input, got {input_dtype}"
             )
+
+        if "FLOAT32" not in output_dtype:
+            raise RuntimeError(
+                f"Expected FLOAT32 output, got {output_dtype}"
+            )
+
+        input_array = np.asarray(
+            tensor,
+            dtype=np.float32,
+            order="C",
         )
 
-        input_index = (
-            self._input_details[0][
-                "index"
-            ]
+        output_array = np.empty(
+            self.EXPECTED_OUTPUT_SHAPE,
+            dtype=np.float32,
+            order="C",
         )
 
-        output_index = (
-            self._output_details[0][
-                "index"
-            ]
+        # --------------------------------------------------------
+        # Direct ByteBuffer
+        # --------------------------------------------------------
+
+        from jnius import autoclass
+
+        ByteBuffer = autoclass(
+            "java.nio.ByteBuffer"
+        )
+
+        ByteOrder = autoclass(
+            "java.nio.ByteOrder"
+        )
+
+        input_buffer = ByteBuffer.allocateDirect(
+            input_array.nbytes
+        )
+
+        input_buffer.order(
+            ByteOrder.nativeOrder()
+        )
+
+        input_buffer.put(
+            input_array.tobytes()
+        )
+
+        input_buffer.rewind()
+
+        output_buffer = ByteBuffer.allocateDirect(
+            output_array.nbytes
+        )
+
+        output_buffer.order(
+            ByteOrder.nativeOrder()
+        )
+
+        self.interpreter.run(
+            input_buffer,
+            output_buffer,
+        )
+
+        output_buffer.rewind()
+
+        output_buffer.get(
+            output_array
+        )
+
+        return output_array
+
+    def _run_single_desktop(self, tensor):
+        """
+        Run one 1024x1024 tensor on desktop TensorFlow Lite.
+        """
+
+        inputs = self.interpreter.get_input_details()
+        outputs = self.interpreter.get_output_details()
+
+        input_index = inputs[0]["index"]
+        output_index = outputs[0]["index"]
+
+        input_array = np.asarray(
+            tensor,
+            dtype=np.float32,
         )
 
         self.interpreter.set_tensor(
             input_index,
-            input_data,
+            input_array,
         )
 
         self.interpreter.invoke()
 
-        output = (
-            self.interpreter
-            .get_tensor(
-                output_index
-            )
+        output = self.interpreter.get_tensor(
+            output_index
         )
 
-        output = np.asarray(
+        return np.asarray(
             output,
-            dtype=self.OUTPUT_DTYPE,
+            dtype=np.float32,
         )
 
-        if output.shape != (
-            self.OUTPUT_SHAPE
-        ):
-            raise ValueError(
-                "Unexpected model output: "
-                f"{output.shape}; "
-                f"expected {self.OUTPUT_SHAPE}"
-            )
+    def _run_single(self, tensor):
+        """Run one model inference."""
 
-        if not np.isfinite(
-            output
-        ).all():
-            raise ValueError(
-                "TFLite output contains "
-                "NaN or infinite values."
-            )
+        if self._android_interpreter:
+            return self._run_single_android(tensor)
 
-        return output
+        return self._run_single_desktop(tensor)
 
-    # ========================================================
-    # SINGLE TILE INFERENCE
-    # ========================================================
+    # ============================================================
+    # CACHE HELPERS
+    # ============================================================
 
-    def _predict_tile(
-        self,
-        tile_input,
-    ):
+    def _cache_get(self, image_path):
         """
-        تشغيل النموذج على Tile واحدة.
+        Safely read cached OCR result.
+
+        Cache errors must never break OCR.
         """
 
-        self._load_interpreter()
+        if not self.cache_enabled or self.cache is None:
+            return None
 
-        if self._ByteBuffer is not None:
-            return self._run_android(
-                tile_input
+        try:
+            cached = self.cache.get(
+                image_path
             )
 
-        return self._run_desktop(
-            tile_input
-        )
+            if cached is None:
+                return None
 
-    # ========================================================
-    # MOVE DETECTIONS
-    # ========================================================
+            result = copy.deepcopy(cached)
 
-    @staticmethod
-    def _move_detections_to_source(
-        detections,
-        offset_x,
-        offset_y,
-    ):
+            result["cache_hit"] = True
+
+            return result
+
+        except Exception:
+            return None
+
+    def _cache_set(self, image_path, result):
         """
-        نقل إحداثيات Detection من Tile
-        إلى الصورة الأصلية.
-        """
+        Safely save OCR result.
 
-        moved = []
-
-        for detection in detections:
-
-            box = detection.get(
-                "box"
-            )
-
-            if (
-                not box
-                or len(box) != 4
-            ):
-                continue
-
-            x1, y1, x2, y2 = box
-
-            updated = dict(
-                detection
-            )
-
-            updated["box"] = (
-                float(
-                    x1 + offset_x
-                ),
-                float(
-                    y1 + offset_y
-                ),
-                float(
-                    x2 + offset_x
-                ),
-                float(
-                    y2 + offset_y
-                ),
-            )
-
-            moved.append(
-                updated
-            )
-
-        return moved
-
-    # ========================================================
-    # TILE POSITIONS
-    # ========================================================
-
-    def _axis_positions(
-        self,
-        length,
-    ):
-        """
-        حساب مواقع Tiles على محور واحد.
+        Failure to write cache must never
+        make a successful OCR request fail.
         """
 
-        tile = self.TILE_SIZE
+        if not self.cache_enabled or self.cache is None:
+            return
 
-        if length <= tile:
-            return [0]
+        try:
+            cache_result = copy.deepcopy(result)
 
-        stride = max(
-            1,
-            int(
-                round(
-                    tile
-                    * (
-                        1.0
-                        - self.TILE_OVERLAP
-                    )
-                )
-            ),
-        )
-
-        positions = [0]
-
-        current = 0
-
-        while True:
-
-            next_position = (
-                current + stride
+            cache_result.pop(
+                "cache_hit",
+                None,
             )
 
-            if (
-                next_position + tile
-                >= length
-            ):
-
-                final_position = (
-                    length - tile
-                )
-
-                if (
-                    final_position
-                    != positions[-1]
-                ):
-                    positions.append(
-                        final_position
-                    )
-
-                break
-
-            positions.append(
-                next_position
+            self.cache.set(
+                image_path,
+                cache_result,
             )
 
-            current = (
-                next_position
-            )
+        except Exception:
+            pass
 
-        return positions
-
-    def _count_tiles(
-        self,
-        width,
-        height,
-    ):
-        return (
-            len(
-                self._axis_positions(
-                    width
-                )
-            )
-            *
-            len(
-                self._axis_positions(
-                    height
-                )
-            )
-        )
-
-    # ========================================================
-    # MAIN PREDICTION
-    # ========================================================
+    # ============================================================
+    # PREDICT
+    # ============================================================
 
     def predict(
         self,
         image_path,
         progress_callback=None,
+        use_cache=True,
     ):
         """
-        تحليل الصورة كاملة.
+        Analyze an image.
 
-        الصور الصغيرة:
-            Tile واحدة.
-
-        الصور الكبيرة:
-            عدة Tiles مع Overlap.
+        Parameters
+        ----------
+        image_path:
+            Path to image.
 
         progress_callback:
-            callback(current_tile, total_tiles)
+            Optional callback:
+                callback(current, total)
+
+        use_cache:
+            Whether cached results may be used.
+
+        Returns
+        -------
+        dict:
+            {
+                "text": str,
+                "detections": list,
+                "lines": list,
+                "cache_hit": bool
+            }
         """
 
         with self._lock:
 
             if self._closed:
                 raise RuntimeError(
-                    "GothicOCR is already closed."
+                    "GothicOCR service is closed."
                 )
 
-            # -----------------------------------------------
-            # Load original image
-            # -----------------------------------------------
+            image_path = Path(image_path)
 
-            image = (
-                self.image_service
-                .load_rgb(
+            if not image_path.exists():
+                raise FileNotFoundError(
+                    f"Image not found: {image_path}"
+                )
+
+            # ----------------------------------------------------
+            # CACHE LOOKUP
+            # ----------------------------------------------------
+
+            if use_cache:
+                cached = self._cache_get(
                     image_path
                 )
+
+                if cached is not None:
+
+                    if progress_callback:
+                        try:
+                            progress_callback(1, 1)
+                        except Exception:
+                            pass
+
+                    return cached
+
+            # ----------------------------------------------------
+            # Load image
+            # ----------------------------------------------------
+
+            image = self.image_service.load_rgb(
+                image_path
             )
 
-            original_height = (
-                image.shape[0]
+            original_height, original_width = (
+                image.shape[:2]
             )
 
-            original_width = (
-                image.shape[1]
+            # ----------------------------------------------------
+            # Generate tiles
+            # ----------------------------------------------------
+
+            tiles = self.image_service.iter_tiles(
+                image,
+                overlap=self.TILE_OVERLAP,
+                tile_size=self.INPUT_SIZE,
             )
 
-            # -----------------------------------------------
-            # Tile count
-            # -----------------------------------------------
+            # Since iter_tiles is a generator, convert only
+            # its metadata references into a list so we know
+            # the progress total.
+            tiles = list(tiles)
 
-            total_tiles = (
-                self._count_tiles(
-                    original_width,
-                    original_height,
+            total_tiles = len(tiles)
+
+            if total_tiles == 0:
+                result = {
+                    "text": "",
+                    "detections": [],
+                    "lines": [],
+                    "cache_hit": False,
+                }
+
+                self._cache_set(
+                    image_path,
+                    result,
                 )
-            )
+
+                return result
 
             all_detections = []
 
-            tiles_processed = 0
+            # ----------------------------------------------------
+            # TILE INFERENCE
+            # ----------------------------------------------------
 
-            # -----------------------------------------------
-            # Process one Tile at a time
-            # -----------------------------------------------
+            for index, tile in enumerate(tiles, start=1):
 
-            for tile in (
-                self.image_service
-                .iter_tiles(
-                    image,
-                    overlap=self.TILE_OVERLAP,
-                    tile_size=self.TILE_SIZE,
-                )
-            ):
-
-                tiles_processed += 1
-
-                # -------------------------------------------
-                # Inference
-                # -------------------------------------------
-
-                output = (
-                    self._predict_tile(
-                        tile["input"]
-                    )
-                )
-
-                # -------------------------------------------
-                # Decode
-                # -------------------------------------------
+                tensor = tile["input"]
 
                 meta = tile["meta"]
 
-                decoded = (
-                    self.decoder.decode(
-                        output=output,
-                        original_width=meta[
-                            "original_width"
-                        ],
-                        original_height=meta[
-                            "original_height"
-                        ],
-                        scale=meta[
-                            "scale"
-                        ],
-                        pad_x=meta[
-                            "pad_x"
-                        ],
-                        pad_y=meta[
-                            "pad_y"
-                        ],
+                offset_x = float(
+                    tile.get("offset_x", 0)
+                )
+
+                offset_y = float(
+                    tile.get("offset_y", 0)
+                )
+
+                # ----------------------------------------------
+                # Model
+                # ----------------------------------------------
+
+                raw_output = self._run_single(
+                    tensor
+                )
+
+                # ----------------------------------------------
+                # Decode
+                # ----------------------------------------------
+
+                decoded = self.decoder.decode(
+                    raw_output,
+                    meta=meta,
+                )
+
+                detections = decoded.get(
+                    "detections",
+                    [],
+                )
+
+                # ----------------------------------------------
+                # Move boxes from tile coordinates
+                # to original image coordinates.
+                # ----------------------------------------------
+
+                for detection in detections:
+
+                    item = copy.deepcopy(
+                        detection
                     )
-                )
 
-                detections = (
-                    decoded.get(
-                        "detections",
-                        [],
-                    )
-                )
+                    box = item.get("box")
 
-                # -------------------------------------------
-                # Convert Tile → Original image
-                # -------------------------------------------
-
-                moved = (
-                    self._move_detections_to_source(
-                        detections,
-                        tile["offset_x"],
-                        tile["offset_y"],
-                    )
-                )
-
-                all_detections.extend(
-                    moved
-                )
-
-                # -------------------------------------------
-                # Progress
-                # -------------------------------------------
-
-                if progress_callback:
-
-                    try:
-                        progress_callback(
-                            tiles_processed,
-                            total_tiles,
+                    if box is not None:
+                        x1, y1, x2, y2 = (
+                            float(box[0]),
+                            float(box[1]),
+                            float(box[2]),
+                            float(box[3]),
                         )
 
+                        item["box"] = [
+                            x1 + offset_x,
+                            y1 + offset_y,
+                            x2 + offset_x,
+                            y2 + offset_y,
+                        ]
+
+                    item["tile_index"] = index
+
+                    all_detections.append(
+                        item
+                    )
+
+                # ----------------------------------------------
+                # Progress
+                # ----------------------------------------------
+
+                if progress_callback:
+                    try:
+                        progress_callback(
+                            index,
+                            total_tiles,
+                        )
                     except Exception:
-                        # UI progress must never
-                        # interrupt OCR.
                         pass
 
-            # -----------------------------------------------
-            # Before global NMS
-            # -----------------------------------------------
+            # ----------------------------------------------------
+            # GLOBAL NMS
+            # ----------------------------------------------------
 
-            detections_before_nms = len(
-                all_detections
-            )
-
-            # -----------------------------------------------
-            # Global merge
-            # -----------------------------------------------
-
-            final_detections = (
-                self.decoder
-                .merge_detections(
+            merged_detections = (
+                self.decoder.merge_detections(
                     all_detections
                 )
             )
 
-            detections_after_nms = len(
-                final_detections
-            )
-
-            # -----------------------------------------------
-            # Final result
-            # -----------------------------------------------
+            # ----------------------------------------------------
+            # Final text reconstruction
+            # ----------------------------------------------------
 
             result = (
-                self.decoder
-                .compose_result(
-                    final_detections
+                self.decoder.compose_result(
+                    merged_detections
                 )
             )
 
-            # -----------------------------------------------
-            # Statistics
-            # -----------------------------------------------
+            # Add useful metadata.
+            result["image_width"] = int(
+                original_width
+            )
 
-            result.update(
-                {
-                    "image_width": int(
-                        original_width
-                    ),
-                    "image_height": int(
-                        original_height
-                    ),
-                    "tiles_processed": int(
-                        tiles_processed
-                    ),
-                    "tiles_expected": int(
-                        total_tiles
-                    ),
-                    "detections_before_nms": int(
-                        detections_before_nms
-                    ),
-                    "detections_after_nms": int(
-                        detections_after_nms
-                    ),
-                }
+            result["image_height"] = int(
+                original_height
+            )
+
+            result["tiles_processed"] = int(
+                total_tiles
+            )
+
+            result["cache_hit"] = False
+
+            # ----------------------------------------------------
+            # SAVE CACHE
+            # ----------------------------------------------------
+
+            self._cache_set(
+                image_path,
+                result,
             )
 
             return result
 
-    # ========================================================
-    # CLEANUP
-    # ========================================================
+    # ============================================================
+    # CACHE MANAGEMENT
+    # ============================================================
+
+    def clear_cache(self):
+        """Delete all cached OCR results."""
+
+        if self.cache is None:
+            return
+
+        try:
+            self.cache.clear()
+        except Exception:
+            pass
+
+    def clean_cache(self):
+        """Remove expired cache entries."""
+
+        if self.cache is None:
+            return 0
+
+        try:
+            return self.cache.clean_old()
+        except Exception:
+            return 0
+
+    def cache_info(self):
+        """
+        Return basic cache statistics.
+        """
+
+        if self.cache is None:
+            return {
+                "enabled": False,
+                "count": 0,
+                "size_bytes": 0,
+            }
+
+        try:
+            return {
+                "enabled": True,
+                "count": self.cache.count(),
+                "size_bytes": self.cache.size_bytes(),
+            }
+
+        except Exception:
+            return {
+                "enabled": True,
+                "count": 0,
+                "size_bytes": 0,
+            }
+
+    # ============================================================
+    # CLOSE
+    # ============================================================
 
     def close(self):
         """
-        تحرير موارد TFLite.
+        Release interpreter resources.
         """
 
         with self._lock:
 
-            interpreter = getattr(
-                self,
-                "interpreter",
-                None,
-            )
+            if self._closed:
+                return
 
-            if interpreter is not None:
+            try:
+                if self.interpreter is not None:
 
-                try:
-                    interpreter.close()
+                    # Desktop TensorFlow Lite
+                    close_method = getattr(
+                        self.interpreter,
+                        "close",
+                        None,
+                    )
 
-                except Exception:
-                    pass
+                    if callable(close_method):
+                        try:
+                            close_method()
+                        except Exception:
+                            pass
 
-            self.interpreter = None
+            finally:
+                self.interpreter = None
+                self._closed = True
 
-            self._input_details = None
-            self._output_details = None
-
-            self._ByteBuffer = None
-            self._ByteOrder = None
-
-            self.input_shape = None
-            self.output_shape = None
-
-            self._closed = True
-
-    # ========================================================
+    # ============================================================
     # CONTEXT MANAGER
-    # ========================================================
+    # ============================================================
 
     def __enter__(self):
         return self
@@ -1035,15 +803,4 @@ class GothicOCR:
         traceback,
     ):
         self.close()
-
-    # ========================================================
-    # DESTRUCTOR
-    # ========================================================
-
-    def __del__(self):
-
-        try:
-            self.close()
-
-        except Exception:
-            pass
+        return False
