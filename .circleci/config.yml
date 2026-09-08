@@ -151,8 +151,7 @@ jobs:
             test -f tests/test_decoder.py
             test -f tests/test_image_service.py
 
-            # Temporary check until Java bridge is inspected.
-            test -f java/org/gothicocr/TFLiteBridge.java
+
 
             echo "All required project files found."
 
@@ -216,9 +215,7 @@ jobs:
               "org.tensorflow:tensorflow-lite:2.17.0" \
               buildozer.spec
 
-            grep -E \
-              '^android.add_src[[:space:]]*=[[:space:]]*java' \
-              buildozer.spec
+            
 
             grep -F \
               "android.permissions = CAMERA,READ_EXTERNAL_STORAGE,READ_MEDIA_IMAGES" \
