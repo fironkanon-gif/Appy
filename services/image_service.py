@@ -14,15 +14,15 @@ class ImageService:
 
     الوظائف:
         1. تجهيز صورة واحدة إلى:
-           [1, 1024, 1024, 3]
+           [1, target_size, target_size, 3]
 
         2. Letterbox مع الحفاظ على الأبعاد.
 
         3. تقسيم الصور الكبيرة إلى Tiles متداخلة
-           Overlapping Tiles حتى لا تضيع الحروف الصغيرة.
+           حتى لا تضيع الحروف الصغيرة.
 
         4. الحفاظ على Metadata اللازمة لإرجاع
-           إحداثيات الحروف إلى الصورة الأصلية.
+           الإحداثيات إلى الصورة الأصلية.
     """
 
     # ========================================================
@@ -53,6 +53,7 @@ class ImageService:
 
     @staticmethod
     def _validate_rgb(image):
+
         image = np.asarray(
             image,
             dtype=np.uint8,
@@ -85,6 +86,7 @@ class ImageService:
     # ========================================================
 
     def _prepare_rgb(self, image):
+
         image = self._validate_rgb(image)
 
         original_h, original_w = image.shape[:2]
@@ -115,6 +117,17 @@ class ImageService:
         new_h = max(
             1,
             int(round(original_h * scale)),
+        )
+
+        # حماية إضافية من تجاوز target_size بسبب rounding
+        new_w = min(
+            new_w,
+            self.target_size,
+        )
+
+        new_h = min(
+            new_h,
+            self.target_size,
         )
 
         # ====================================================
@@ -169,7 +182,7 @@ class ImageService:
         )
 
         # ====================================================
-        # NUMPY
+        # CONVERT TO NUMPY
         # ====================================================
 
         array = np.asarray(
@@ -184,7 +197,7 @@ class ImageService:
         array /= 255.0
 
         # ====================================================
-        # VALIDATE NORMALIZED VALUES
+        # VALIDATE VALUES
         # ====================================================
 
         if not np.all(
@@ -194,8 +207,13 @@ class ImageService:
                 "الصورة تحتوي على NaN أو Inf."
             )
 
-        min_value = float(np.min(array))
-        max_value = float(np.max(array))
+        min_value = float(
+            np.min(array)
+        )
+
+        max_value = float(
+            np.max(array)
+        )
 
         if min_value < 0.0 or max_value > 1.0:
             raise RuntimeError(
@@ -276,8 +294,6 @@ class ImageService:
         """
         تحميل الصورة الأصلية وتحويلها إلى RGB
         بدون تصغيرها.
-
-        هذا مهم جدًا للـTiling.
         """
 
         path = Path(
@@ -290,6 +306,7 @@ class ImageService:
             )
 
         try:
+
             with Image.open(path) as source:
 
                 image = source.convert(
@@ -318,30 +335,126 @@ class ImageService:
     @staticmethod
     def _tile_positions(
         length,
-        tile_size,
-        stride,
+        other_length=None,
+        tile_size=None,
+        overlap=None,
     ):
         """
-        إنشاء مواقع Tiles بحيث نضمن تغطية
-        كامل الصورة، بما فيها الحافة الأخيرة.
+        إنشاء مواقع بداية الـ Tiles على محور واحد.
+
+        يدعم طريقتين للاستدعاء:
+
+        الطريقة القديمة:
+            _tile_positions(
+                length,
+                tile_size,
+                overlap
+            )
+
+        الطريقة المستخدمة في اختبارات المشروع:
+            _tile_positions(
+                length,
+                other_length,
+                tile_size,
+                overlap
+            )
+
+        other_length موجود للتوافق مع اختبارات المشروع
+        ولا يؤثر على حساب مواقع الـ Tiles.
         """
 
+        # ====================================================
+        # COMPATIBILITY MODE
+        # ====================================================
+
+        # الاستدعاء القديم:
+        #
+        # _tile_positions(
+        #     length,
+        #     tile_size,
+        #     overlap
+        # )
+        #
+        # عندها overlap ستكون None بسبب التوقيع الحالي.
+
+        if overlap is None:
+
+            overlap = tile_size
+            tile_size = other_length
+
+            other_length = length
+
+        # ====================================================
+        # CONVERT TYPES
+        # ====================================================
+
         length = int(length)
+        other_length = int(other_length)
         tile_size = int(tile_size)
-        stride = int(stride)
+        overlap = float(overlap)
+
+        # ====================================================
+        # VALIDATION
+        # ====================================================
+
+        if length <= 0:
+            raise ValueError(
+                "length يجب أن يكون أكبر من صفر."
+            )
+
+        if other_length <= 0:
+            raise ValueError(
+                "other_length يجب أن يكون أكبر من صفر."
+            )
+
+        if tile_size <= 0:
+            raise ValueError(
+                "tile_size يجب أن يكون أكبر من صفر."
+            )
+
+        if not 0.0 <= overlap < 0.5:
+            raise ValueError(
+                "overlap يجب أن يكون بين 0.0 و0.5."
+            )
+
+        # ====================================================
+        # SMALL DIMENSION
+        # ====================================================
 
         if length <= tile_size:
             return [0]
 
+        # ====================================================
+        # CALCULATE STRIDE
+        # ====================================================
+
+        stride = max(
+            1,
+            int(
+                round(
+                    tile_size
+                    * (1.0 - overlap)
+                )
+            ),
+        )
+
         positions = []
 
         position = 0
+
+        # ====================================================
+        # GENERATE POSITIONS
+        # ====================================================
 
         while True:
 
             positions.append(
                 int(position)
             )
+
+            # ------------------------------------------------
+            # Current tile reaches the end
+            # ------------------------------------------------
 
             if position + tile_size >= length:
                 break
@@ -351,19 +464,17 @@ class ImageService:
             )
 
             # ------------------------------------------------
-            # إذا كانت القطعة التالية ستتجاوز النهاية،
-            # نحركها بحيث تنتهي بالضبط عند حافة الصورة.
+            # Next tile would reach or exceed the end
             # ------------------------------------------------
 
             if next_position + tile_size >= length:
+
                 final_position = (
                     length - tile_size
                 )
 
-                if (
-                    not positions
-                    or final_position != positions[-1]
-                ):
+                if final_position != positions[-1]:
+
                     positions.append(
                         int(final_position)
                     )
@@ -371,6 +482,30 @@ class ImageService:
                 break
 
             position = next_position
+
+        # ====================================================
+        # REMOVE DUPLICATES + SORT
+        # ====================================================
+
+        positions = sorted(
+            set(positions)
+        )
+
+        # ====================================================
+        # FINAL SAFETY VALIDATION
+        # ====================================================
+
+        for position in positions:
+
+            if position < 0:
+                raise RuntimeError(
+                    "تم إنشاء Tile position سالب."
+                )
+
+            if position >= length:
+                raise RuntimeError(
+                    "تم إنشاء Tile position خارج الصورة."
+                )
 
         return positions
 
@@ -386,32 +521,6 @@ class ImageService:
     ):
         """
         تقسيم الصورة إلى Tiles متداخلة.
-
-        Args:
-            image:
-                RGB numpy image [H, W, 3]
-
-            overlap:
-                نسبة التداخل بين القطع.
-                الافتراضي 15%.
-
-            tile_size:
-                حجم القطعة الأصلية.
-                الافتراضي = target_size.
-
-        Yields:
-            {
-                "input": prepared_input,
-                "meta": metadata,
-                "offset_x": x,
-                "offset_y": y,
-                "tile_width": width,
-                "tile_height": height,
-            }
-
-        ملاحظة:
-            الإحداثيات offset_x / offset_y هي إحداثيات
-            القطعة داخل الصورة الأصلية.
         """
 
         image = self._validate_rgb(
@@ -419,6 +528,10 @@ class ImageService:
         )
 
         height, width = image.shape[:2]
+
+        # ====================================================
+        # TILE SIZE
+        # ====================================================
 
         if tile_size is None:
             tile_size = self.target_size
@@ -435,6 +548,10 @@ class ImageService:
                 "tile_size لا يمكن أن يكون أكبر "
                 "من target_size."
             )
+
+        # ====================================================
+        # OVERLAP
+        # ====================================================
 
         overlap = float(overlap)
 
@@ -456,6 +573,19 @@ class ImageService:
                 image
             )
 
+            meta = dict(meta)
+
+            meta.update(
+                {
+                    "offset_x": 0,
+                    "offset_y": 0,
+                    "tile_width": int(width),
+                    "tile_height": int(height),
+                    "source_width": int(width),
+                    "source_height": int(height),
+                }
+            )
+
             yield {
                 "input": prepared,
                 "meta": meta,
@@ -468,29 +598,21 @@ class ImageService:
             return
 
         # ====================================================
-        # STRIDE
+        # TILE POSITIONS
         # ====================================================
-
-        stride = max(
-            1,
-            int(
-                round(
-                    tile_size
-                    * (1.0 - overlap)
-                )
-            ),
-        )
 
         x_positions = self._tile_positions(
             width,
+            height,
             tile_size,
-            stride,
+            overlap,
         )
 
         y_positions = self._tile_positions(
             height,
+            width,
             tile_size,
-            stride,
+            overlap,
         )
 
         # ====================================================
@@ -525,56 +647,43 @@ class ImageService:
                     end_x - offset_x
                 )
 
+                if tile_width <= 0 or tile_height <= 0:
+                    continue
+
                 prepared, meta = (
                     self._prepare_rgb(
                         tile
                     )
                 )
 
-                # ------------------------------------------------
-                # إضافة معلومات الموقع الأصلي للقطعة.
-                # ------------------------------------------------
+                # =================================================
+                # ADD ORIGINAL TILE LOCATION METADATA
+                # =================================================
 
                 meta = dict(meta)
 
                 meta.update(
                     {
-                        "offset_x": int(
-                            offset_x
-                        ),
-                        "offset_y": int(
-                            offset_y
-                        ),
-                        "tile_width": int(
-                            tile_width
-                        ),
-                        "tile_height": int(
-                            tile_height
-                        ),
-                        "source_width": int(
-                            width
-                        ),
-                        "source_height": int(
-                            height
-                        ),
+                        "offset_x": int(offset_x),
+                        "offset_y": int(offset_y),
+
+                        "tile_width": int(tile_width),
+                        "tile_height": int(tile_height),
+
+                        "source_width": int(width),
+                        "source_height": int(height),
                     }
                 )
 
                 yield {
                     "input": prepared,
                     "meta": meta,
-                    "offset_x": int(
-                        offset_x
-                    ),
-                    "offset_y": int(
-                        offset_y
-                    ),
-                    "tile_width": int(
-                        tile_width
-                    ),
-                    "tile_height": int(
-                        tile_height
-                    ),
+
+                    "offset_x": int(offset_x),
+                    "offset_y": int(offset_y),
+
+                    "tile_width": int(tile_width),
+                    "tile_height": int(tile_height),
                 }
 
     # ========================================================
@@ -586,10 +695,7 @@ class ImageService:
         image_path,
     ):
         """
-        السلوك القديم:
-        تحميل الصورة وتجهيزها مباشرة إلى 1024x1024.
-
-        نحافظ عليه للتوافق مع الكود الحالي.
+        تحميل الصورة وتجهيزها مباشرة.
         """
 
         image = self.load_rgb(
@@ -628,9 +734,6 @@ class ImageService:
     ):
         """
         تحميل الصورة الأصلية ثم إرجاع Tiles.
-
-        Generator حتى لا يتم إنشاء كل القطع
-        في الذاكرة دفعة واحدة.
         """
 
         image = self.load_rgb(
