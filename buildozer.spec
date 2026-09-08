@@ -6,41 +6,114 @@ package.domain = org.gothicocr
 version = 1.0.0
 
 source.dir = .
+
 source.include_exts = py,png,jpg,jpeg,webp,ttf,tflite,json,java
+
 source.exclude_dirs = tests,__pycache__,.buildozer,bin,.git
+
+# ============================================================
+# PYTHON REQUIREMENTS
+# ============================================================
 
 requirements = python3,kivy,numpy,pillow,pyjnius
 
 orientation = portrait
+
 fullscreen = 0
 
+
+# ============================================================
+# ANDROID PERMISSIONS
+# ============================================================
+
 android.permissions = READ_EXTERNAL_STORAGE,READ_MEDIA_IMAGES
+
+
+# ============================================================
+# ANDROID API
+# ============================================================
 
 android.api = 35
 android.minapi = 24
 
+
+# ============================================================
+# ARCHITECTURE
+# ============================================================
+
 android.archs = arm64-v8a
 
-# Use the NDK already available in CircleCI
+
+# ============================================================
+# NDK
+# ============================================================
+
 android.ndk = 28c
+
+
+# ============================================================
+# ANDROIDX
+# ============================================================
 
 android.enable_androidx = True
 
-# TensorFlow Lite Java dependency
+
+# ============================================================
+# TENSORFLOW LITE
+# ============================================================
+
 android.gradle_dependencies = org.tensorflow:tensorflow-lite:2.17.0
 
-# Custom Java bridge
+
+# ============================================================
+# CUSTOM JAVA
+# ============================================================
+
 android.add_src = java
+
+
+# ============================================================
+# STORAGE
+# ============================================================
 
 android.private_storage = True
 
+
+# ============================================================
+# BOOTSTRAP
+# ============================================================
+
 p4a.bootstrap = sdl2
 
+
+# ============================================================
+# IMPORTANT:
+# PYTHON 3.14 + CHARSET_NORMALIZER FIX
+# ============================================================
+
+p4a.fork = kivy
+
+p4a.branch = develop
+
+
+# ============================================================
+# BUILD OUTPUT
+# ============================================================
+
 android.debug_artifact = apk
+
 android.release_artifact = aab
+
+
+# ============================================================
+# LOGCAT
+# ============================================================
 
 android.logcat_filters = *:S python:D
 
-android.allow_backup = False
 
-p4a.branch = master
+# ============================================================
+# BACKUP
+# ============================================================
+
+android.allow_backup = False
