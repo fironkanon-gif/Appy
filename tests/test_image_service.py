@@ -1,748 +1,701 @@
 # ============================================================
-# GOTHIC OCR — IMAGE SERVICE
+# GOTHIC OCR — IMAGE SERVICE TESTS
 # ============================================================
 
-from pathlib import Path
-
 import numpy as np
-from PIL import Image
+import pytest
+
+from services.image_service import ImageService
 
 
-class ImageService:
+# ============================================================
+# FIXTURES
+# ============================================================
+
+@pytest.fixture
+def service():
+    return ImageService()
+
+
+def make_image(width, height):
     """
-    تجهيز الصور لنموذج GothicOCR.
-
-    الوظائف:
-        1. تجهيز صورة واحدة إلى:
-           [1, 1024, 1024, 3]
-
-        2. Letterbox مع الحفاظ على الأبعاد.
-
-        3. تقسيم الصور الكبيرة إلى Tiles متداخلة
-           Overlapping Tiles حتى لا تضيع الحروف الصغيرة.
-
-        4. الحفاظ على Metadata اللازمة لإرجاع
-           إحداثيات الحروف إلى الصورة الأصلية.
+    إنشاء صورة RGB وهمية بالحجم المطلوب.
     """
 
-    # ========================================================
-    # INIT
-    # ========================================================
+    return np.zeros(
+        (height, width, 3),
+        dtype=np.uint8,
+    )
 
-    def __init__(
-        self,
-        target_size=1024,
-        fill=114,
-    ):
-        self.target_size = int(target_size)
-        self.fill = int(fill)
 
-        if self.target_size <= 0:
-            raise ValueError(
-                "target_size يجب أن يكون أكبر من صفر."
-            )
+# ============================================================
+# RGB VALIDATION
+# ============================================================
 
-        if not 0 <= self.fill <= 255:
-            raise ValueError(
-                "fill يجب أن يكون بين 0 و255."
-            )
+def test_rgb_image_is_valid(service):
 
-    # ========================================================
-    # VALIDATE RGB IMAGE
-    # ========================================================
+    image = make_image(
+        640,
+        480,
+    )
 
-    @staticmethod
-    def _validate_rgb(image):
-        image = np.asarray(
+    result = service._validate_rgb(
+        image
+    )
+
+    assert result.shape == (
+        480,
+        640,
+        3,
+    )
+
+    assert result.dtype == np.uint8
+
+
+def test_grayscale_image_is_rejected(service):
+
+    image = np.zeros(
+        (480, 640),
+        dtype=np.uint8,
+    )
+
+    with pytest.raises(ValueError):
+
+        service._validate_rgb(
+            image
+        )
+
+
+def test_rgba_image_is_rejected(service):
+
+    image = np.zeros(
+        (480, 640, 4),
+        dtype=np.uint8,
+    )
+
+    with pytest.raises(ValueError):
+
+        service._validate_rgb(
+            image
+        )
+
+
+# ============================================================
+# PREPARE
+# ============================================================
+
+def test_prepare_returns_1024_input(service):
+
+    image = make_image(
+        800,
+        600,
+    )
+
+    prepared, meta = service.prepare(
+        image
+    )
+
+    assert prepared.shape == (
+        1,
+        1024,
+        1024,
+        3,
+    )
+
+
+def test_prepare_returns_float32(service):
+
+    image = make_image(
+        800,
+        600,
+    )
+
+    prepared, meta = service.prepare(
+        image
+    )
+
+    assert prepared.dtype == np.float32
+
+
+def test_prepare_normalizes_pixels(service):
+
+    image = np.full(
+        (500, 700, 3),
+        255,
+        dtype=np.uint8,
+    )
+
+    prepared, meta = service.prepare(
+        image
+    )
+
+    assert prepared.max() <= 1.0
+
+    assert prepared.min() >= 0.0
+
+
+# ============================================================
+# METADATA
+# ============================================================
+
+def test_prepare_metadata_contains_original_size(
+    service,
+):
+
+    width = 800
+    height = 600
+
+    image = make_image(
+        width,
+        height,
+    )
+
+    prepared, meta = service.prepare(
+        image
+    )
+
+    assert meta["original_width"] == width
+
+    assert meta["original_height"] == height
+
+
+def test_prepare_scale_is_positive(service):
+
+    image = make_image(
+        1600,
+        900,
+    )
+
+    prepared, meta = service.prepare(
+        image
+    )
+
+    assert meta["scale"] > 0
+
+
+def test_prepare_contains_padding_metadata(
+    service,
+):
+
+    image = make_image(
+        800,
+        600,
+    )
+
+    prepared, meta = service.prepare(
+        image
+    )
+
+    assert "pad_x" in meta
+
+    assert "pad_y" in meta
+
+
+# ============================================================
+# TILE POSITIONS
+# ============================================================
+
+def test_small_image_has_one_tile(service):
+
+    positions = service._tile_positions(
+        800,
+        600,
+        1024,
+        0.15,
+    )
+
+    assert positions == [0]
+
+
+def test_exact_1024_image_has_one_tile(service):
+
+    positions = service._tile_positions(
+        1024,
+        1024,
+        1024,
+        0.15,
+    )
+
+    assert positions == [0]
+
+
+def test_large_dimension_has_multiple_tiles(
+    service,
+):
+
+    positions = service._tile_positions(
+        3000,
+        2000,
+        1024,
+        0.15,
+    )
+
+    assert len(positions) > 1
+
+
+def test_tile_positions_are_sorted(service):
+
+    positions = service._tile_positions(
+        5000,
+        3500,
+        1024,
+        0.15,
+    )
+
+    assert positions == sorted(
+        positions
+    )
+
+
+def test_tile_positions_do_not_exceed_image(
+    service,
+):
+
+    image_width = 3500
+    tile_size = 1024
+
+    positions = service._tile_positions(
+        image_width,
+        2000,
+        tile_size,
+        0.15,
+    )
+
+    for x in positions:
+
+        assert x >= 0
+
+        assert x + tile_size <= image_width
+
+
+# ============================================================
+# TILING — SMALL IMAGE
+# ============================================================
+
+def test_iter_tiles_small_image(service):
+
+    image = make_image(
+        800,
+        600,
+    )
+
+    tiles = list(
+        service.iter_tiles(
             image,
-            dtype=np.uint8,
+            overlap=0.15,
+            tile_size=1024,
         )
+    )
 
-        if image.ndim != 3:
-            raise ValueError(
-                "الصورة يجب أن تكون ثلاثية الأبعاد "
-                "[H, W, C]. "
-                f"Got: {image.shape}"
-            )
+    assert len(tiles) == 1
 
-        if image.shape[2] != 3:
-            raise ValueError(
-                "الصورة يجب أن تكون RGB بثلاث قنوات. "
-                f"Got: {image.shape}"
-            )
+    tile = tiles[0]
 
-        height, width = image.shape[:2]
+    assert tile["input"].shape == (
+        1,
+        1024,
+        1024,
+        3,
+    )
 
-        if width <= 0 or height <= 0:
-            raise ValueError(
-                "أبعاد الصورة غير صحيحة."
-            )
+    assert tile["offset_x"] == 0
 
-        return image
+    assert tile["offset_y"] == 0
 
-    # ========================================================
-    # PREPARE RGB IMAGE
-    # ========================================================
 
-    def _prepare_rgb(self, image):
-        image = self._validate_rgb(image)
+# ============================================================
+# TILING — LARGE IMAGE
+# ============================================================
 
-        original_h, original_w = image.shape[:2]
+def test_iter_tiles_large_image(service):
 
-        # ====================================================
-        # LETTERBOX SCALE
-        # ====================================================
+    image = make_image(
+        3000,
+        2500,
+    )
 
-        scale = min(
-            self.target_size / float(original_w),
-            self.target_size / float(original_h),
-        )
-
-        if not np.isfinite(scale) or scale <= 0:
-            raise ValueError(
-                f"قيمة scale غير صحيحة: {scale}"
-            )
-
-        # ====================================================
-        # NEW DIMENSIONS
-        # ====================================================
-
-        new_w = max(
-            1,
-            int(round(original_w * scale)),
-        )
-
-        new_h = max(
-            1,
-            int(round(original_h * scale)),
-        )
-
-        # ====================================================
-        # RESIZE
-        # ====================================================
-
-        pil_image = Image.fromarray(
+    tiles = list(
+        service.iter_tiles(
             image,
-            "RGB",
+            overlap=0.15,
+            tile_size=1024,
         )
+    )
 
-        resized = pil_image.resize(
-            (new_w, new_h),
-            Image.Resampling.LANCZOS,
+    assert len(tiles) > 1
+
+
+def test_each_tile_has_correct_input_shape(
+    service,
+):
+
+    image = make_image(
+        3000,
+        2500,
+    )
+
+    tiles = list(
+        service.iter_tiles(
+            image,
+            overlap=0.15,
+            tile_size=1024,
         )
+    )
 
-        # ====================================================
-        # CREATE LETTERBOX CANVAS
-        # ====================================================
+    for tile in tiles:
 
-        canvas = Image.new(
-            "RGB",
-            (
-                self.target_size,
-                self.target_size,
-            ),
-            (
-                self.fill,
-                self.fill,
-                self.fill,
-            ),
-        )
-
-        # ====================================================
-        # PADDING
-        # ====================================================
-
-        pad_x = (
-            self.target_size - new_w
-        ) // 2
-
-        pad_y = (
-            self.target_size - new_h
-        ) // 2
-
-        canvas.paste(
-            resized,
-            (
-                pad_x,
-                pad_y,
-            ),
-        )
-
-        # ====================================================
-        # NUMPY
-        # ====================================================
-
-        array = np.asarray(
-            canvas,
-            dtype=np.float32,
-        )
-
-        # ====================================================
-        # NORMALIZE
-        # ====================================================
-
-        array /= 255.0
-
-        # ====================================================
-        # VALIDATE NORMALIZED VALUES
-        # ====================================================
-
-        if not np.all(
-            np.isfinite(array)
-        ):
-            raise RuntimeError(
-                "الصورة تحتوي على NaN أو Inf."
-            )
-
-        min_value = float(
-            np.min(array)
-        )
-
-        max_value = float(
-            np.max(array)
-        )
-
-        if min_value < 0.0 or max_value > 1.0:
-            raise RuntimeError(
-                "قيم الصورة بعد التطبيع "
-                "خرجت عن النطاق 0..1."
-            )
-
-        # ====================================================
-        # ADD BATCH DIMENSION
-        # ====================================================
-
-        prepared_input = np.expand_dims(
-            array,
-            axis=0,
-        )
-
-        # ====================================================
-        # CONTIGUOUS FLOAT32
-        # ====================================================
-
-        prepared_input = np.ascontiguousarray(
-            prepared_input,
-            dtype=np.float32,
-        )
-
-        # ====================================================
-        # STRICT SHAPE VALIDATION
-        # ====================================================
-
-        expected_shape = (
+        assert tile["input"].shape == (
             1,
-            self.target_size,
-            self.target_size,
+            1024,
+            1024,
             3,
         )
 
-        if prepared_input.shape != expected_shape:
-            raise RuntimeError(
-                "فشل تجهيز الصورة. "
-                f"الناتج: {prepared_input.shape}. "
-                f"المتوقع: {expected_shape}."
-            )
 
-        # ====================================================
-        # METADATA
-        # ====================================================
+# ============================================================
+# TILE OFFSETS
+# ============================================================
 
-        meta = {
-            "original_width": int(original_w),
-            "original_height": int(original_h),
+def test_tile_offsets_are_non_negative(
+    service,
+):
 
-            "resized_width": int(new_w),
-            "resized_height": int(new_h),
+    image = make_image(
+        3000,
+        2500,
+    )
 
-            "scale": float(scale),
-
-            "pad_x": float(pad_x),
-            "pad_y": float(pad_y),
-
-            "input_size": int(
-                self.target_size
-            ),
-        }
-
-        return (
-            prepared_input,
-            meta,
+    tiles = list(
+        service.iter_tiles(
+            image,
+            overlap=0.15,
+            tile_size=1024,
         )
+    )
 
-    # ========================================================
-    # LOAD RGB IMAGE ONLY
-    # ========================================================
+    for tile in tiles:
 
-    def load_rgb(
-        self,
-        image_path,
+        assert tile["offset_x"] >= 0
+
+        assert tile["offset_y"] >= 0
+
+
+def test_tile_offsets_stay_inside_image(
+    service,
+):
+
+    width = 3000
+    height = 2500
+
+    image = make_image(
+        width,
+        height,
+    )
+
+    tiles = list(
+        service.iter_tiles(
+            image,
+            overlap=0.15,
+            tile_size=1024,
+        )
+    )
+
+    for tile in tiles:
+
+        x = tile["offset_x"]
+        y = tile["offset_y"]
+
+        tile_width = tile["tile_width"]
+        tile_height = tile["tile_height"]
+
+        assert x + tile_width <= width
+
+        assert y + tile_height <= height
+
+
+# ============================================================
+# TILE COVERAGE
+# ============================================================
+
+def test_tiles_cover_left_edge(service):
+
+    image = make_image(
+        3000,
+        2500,
+    )
+
+    tiles = list(
+        service.iter_tiles(
+            image,
+            overlap=0.15,
+            tile_size=1024,
+        )
+    )
+
+    assert any(
+        tile["offset_x"] == 0
+        for tile in tiles
+    )
+
+
+def test_tiles_cover_top_edge(service):
+
+    image = make_image(
+        3000,
+        2500,
+    )
+
+    tiles = list(
+        service.iter_tiles(
+            image,
+            overlap=0.15,
+            tile_size=1024,
+        )
+    )
+
+    assert any(
+        tile["offset_y"] == 0
+        for tile in tiles
+    )
+
+
+def test_tiles_cover_right_edge(service):
+
+    width = 3000
+
+    image = make_image(
+        width,
+        2500,
+    )
+
+    tiles = list(
+        service.iter_tiles(
+            image,
+            overlap=0.15,
+            tile_size=1024,
+        )
+    )
+
+    assert any(
+        tile["offset_x"]
+        + tile["tile_width"]
+        == width
+        for tile in tiles
+    )
+
+
+def test_tiles_cover_bottom_edge(service):
+
+    height = 2500
+
+    image = make_image(
+        3000,
+        height,
+    )
+
+    tiles = list(
+        service.iter_tiles(
+            image,
+            overlap=0.15,
+            tile_size=1024,
+        )
+    )
+
+    assert any(
+        tile["offset_y"]
+        + tile["tile_height"]
+        == height
+        for tile in tiles
+    )
+
+
+# ============================================================
+# OVERLAP
+# ============================================================
+
+def test_overlap_creates_shared_regions(
+    service,
+):
+
+    width = 3000
+
+    positions = service._tile_positions(
+        width,
+        1024,
+        1024,
+        0.15,
+    )
+
+    assert len(positions) >= 2
+
+    for first, second in zip(
+        positions,
+        positions[1:],
     ):
-        """
-        تحميل الصورة الأصلية وتحويلها إلى RGB
-        بدون تصغيرها.
 
-        هذا مهم جدًا للـ Tiling.
-        """
-
-        path = Path(
-            image_path
+        overlap_width = (
+            first
+            + 1024
+            - second
         )
 
-        if not path.is_file():
-            raise FileNotFoundError(
-                f"الصورة غير موجودة: {path}"
-            )
+        assert overlap_width > 0
 
-        try:
-            with Image.open(path) as source:
 
-                image = source.convert(
-                    "RGB"
-                )
+# ============================================================
+# RGB CONTENT
+# ============================================================
 
-                array = np.asarray(
-                    image,
-                    dtype=np.uint8,
-                )
+def test_tile_preserves_rgb_channels(service):
 
-        except Exception as exc:
+    image = np.zeros(
+        (1500, 1500, 3),
+        dtype=np.uint8,
+    )
 
-            raise RuntimeError(
-                f"تعذر فتح الصورة: {path}"
-            ) from exc
+    image[:, :, 0] = 255
 
-        return self._validate_rgb(
-            array
+    tiles = list(
+        service.iter_tiles(
+            image,
+            overlap=0.15,
+            tile_size=1024,
+        )
+    )
+
+    assert len(tiles) > 1
+
+    for tile in tiles:
+
+        prepared = tile["input"]
+
+        assert prepared.shape[-1] == 3
+
+        assert prepared.dtype == np.float32
+
+
+# ============================================================
+# TILE METADATA
+# ============================================================
+
+def test_tile_contains_required_metadata(
+    service,
+):
+
+    image = make_image(
+        2000,
+        1600,
+    )
+
+    tiles = list(
+        service.iter_tiles(
+            image,
+            overlap=0.15,
+            tile_size=1024,
+        )
+    )
+
+    required_keys = {
+        "input",
+        "meta",
+        "offset_x",
+        "offset_y",
+        "tile_width",
+        "tile_height",
+    }
+
+    for tile in tiles:
+
+        assert required_keys.issubset(
+            tile.keys()
         )
 
-    # ========================================================
-    # GENERATE TILE START POSITIONS
-    # ========================================================
 
-    @staticmethod
-    def _tile_positions(
-        length,
-        other_length,
-        tile_size,
-        overlap,
-    ):
-        """
-        إنشاء مواقع بداية الـ Tiles على محور واحد.
+def test_tile_metadata_keeps_original_dimensions(
+    service,
+):
 
-        Parameters:
-            length:
-                طول المحور الحالي.
+    width = 2000
+    height = 1600
 
-            other_length:
-                طول المحور الآخر.
+    image = make_image(
+        width,
+        height,
+    )
 
-                موجود للتوافق مع اختبارات المشروع
-                الحالية ولا يؤثر على حساب المواقع.
+    tiles = list(
+        service.iter_tiles(
+            image,
+            overlap=0.15,
+            tile_size=1024,
+        )
+    )
 
-            tile_size:
-                حجم الـ Tile.
+    for tile in tiles:
 
-            overlap:
-                نسبة التداخل بين الـ Tiles.
+        meta = tile["meta"]
 
-        Returns:
-            قائمة مرتبة بمواقع بداية الـ Tiles.
-        """
+        assert (
+            meta["original_width"]
+            == tile["tile_width"]
+        )
 
-        length = int(length)
-        other_length = int(other_length)
-        tile_size = int(tile_size)
-        overlap = float(overlap)
+        assert (
+            meta["original_height"]
+            == tile["tile_height"]
+        )
 
-        # ====================================================
-        # VALIDATION
-        # ====================================================
 
-        if length <= 0:
-            raise ValueError(
-                "length يجب أن يكون أكبر من صفر."
-            )
+# ============================================================
+# DIFFERENT IMAGE SIZES
+# ============================================================
 
-        if other_length <= 0:
-            raise ValueError(
-                "other_length يجب أن يكون أكبر من صفر."
-            )
+@pytest.mark.parametrize(
+    "width,height",
+    [
+        (100, 100),
+        (640, 480),
+        (1024, 1024),
+        (1500, 1200),
+        (2048, 2048),
+        (3000, 2000),
+        (5000, 3500),
+    ],
+)
+def test_tiling_for_multiple_sizes(
+    service,
+    width,
+    height,
+):
 
-        if tile_size <= 0:
-            raise ValueError(
-                "tile_size يجب أن يكون أكبر من صفر."
-            )
+    image = make_image(
+        width,
+        height,
+    )
 
-        if not 0.0 <= overlap < 0.5:
-            raise ValueError(
-                "overlap يجب أن يكون بين 0.0 و0.5."
-            )
+    tiles = list(
+        service.iter_tiles(
+            image,
+            overlap=0.15,
+            tile_size=1024,
+        )
+    )
 
-        # ====================================================
-        # SMALL IMAGE / DIMENSION
-        # ====================================================
+    assert len(tiles) >= 1
 
-        if length <= tile_size:
-            return [0]
+    for tile in tiles:
 
-        # ====================================================
-        # CALCULATE STRIDE
-        # ====================================================
-
-        stride = max(
+        assert tile["input"].shape == (
             1,
-            int(
-                round(
-                    tile_size
-                    * (1.0 - overlap)
-                )
-            ),
+            1024,
+            1024,
+            3,
         )
 
-        positions = []
-
-        position = 0
-
-        # ====================================================
-        # GENERATE POSITIONS
-        # ====================================================
-
-        while True:
-
-            positions.append(
-                int(position)
-            )
-
-            # ------------------------------------------------
-            # إذا كانت الـ Tile الحالية تغطي النهاية.
-            # ------------------------------------------------
-
-            if position + tile_size >= length:
-                break
-
-            next_position = (
-                position + stride
-            )
-
-            # ------------------------------------------------
-            # إذا تجاوزت الـ Tile القادمة النهاية،
-            # نضع آخر Tile بحيث ينتهي عند حافة الصورة.
-            # ------------------------------------------------
-
-            if next_position + tile_size >= length:
-
-                final_position = (
-                    length - tile_size
-                )
-
-                if final_position != positions[-1]:
-
-                    positions.append(
-                        int(final_position)
-                    )
-
-                break
-
-            position = next_position
-
-        # ====================================================
-        # REMOVE DUPLICATES + SORT
-        # ====================================================
-
-        positions = sorted(
-            set(positions)
+        assert (
+            0 <= tile["offset_x"] <= width
         )
 
-        return positions
-
-    # ========================================================
-    # PREPARE OVERLAPPING TILES
-    # ========================================================
-
-    def iter_tiles(
-        self,
-        image,
-        overlap=0.15,
-        tile_size=None,
-    ):
-        """
-        تقسيم الصورة إلى Tiles متداخلة.
-
-        Args:
-            image:
-                RGB numpy image [H, W, 3]
-
-            overlap:
-                نسبة التداخل بين القطع.
-                الافتراضي 15%.
-
-            tile_size:
-                حجم القطعة الأصلية.
-                الافتراضي = target_size.
-
-        Yields:
-            {
-                "input": prepared_input,
-                "meta": metadata,
-                "offset_x": x,
-                "offset_y": y,
-                "tile_width": width,
-                "tile_height": height,
-            }
-
-        ملاحظة:
-            الإحداثيات offset_x / offset_y هي إحداثيات
-            القطعة داخل الصورة الأصلية.
-        """
-
-        image = self._validate_rgb(
-            image
-        )
-
-        height, width = image.shape[:2]
-
-        # ====================================================
-        # TILE SIZE
-        # ====================================================
-
-        if tile_size is None:
-            tile_size = self.target_size
-
-        tile_size = int(tile_size)
-
-        if tile_size <= 0:
-            raise ValueError(
-                "tile_size يجب أن يكون أكبر من صفر."
-            )
-
-        if tile_size > self.target_size:
-            raise ValueError(
-                "tile_size لا يمكن أن يكون أكبر "
-                "من target_size."
-            )
-
-        # ====================================================
-        # OVERLAP
-        # ====================================================
-
-        overlap = float(overlap)
-
-        if not 0.0 <= overlap < 0.5:
-            raise ValueError(
-                "overlap يجب أن يكون بين 0.0 و0.5."
-            )
-
-        # ====================================================
-        # SMALL IMAGE
-        # ====================================================
-
-        if (
-            width <= tile_size
-            and height <= tile_size
-        ):
-
-            prepared, meta = self._prepare_rgb(
-                image
-            )
-
-            meta = dict(meta)
-
-            meta.update(
-                {
-                    "offset_x": 0,
-                    "offset_y": 0,
-                    "tile_width": int(width),
-                    "tile_height": int(height),
-                    "source_width": int(width),
-                    "source_height": int(height),
-                }
-            )
-
-            yield {
-                "input": prepared,
-                "meta": meta,
-                "offset_x": 0,
-                "offset_y": 0,
-                "tile_width": int(width),
-                "tile_height": int(height),
-            }
-
-            return
-
-        # ====================================================
-        # TILE POSITIONS
-        # ====================================================
-
-        x_positions = self._tile_positions(
-            width,
-            height,
-            tile_size,
-            overlap,
-        )
-
-        y_positions = self._tile_positions(
-            height,
-            width,
-            tile_size,
-            overlap,
-        )
-
-        # ====================================================
-        # GENERATE TILES
-        # ====================================================
-
-        for offset_y in y_positions:
-
-            for offset_x in x_positions:
-
-                end_x = min(
-                    offset_x + tile_size,
-                    width,
-                )
-
-                end_y = min(
-                    offset_y + tile_size,
-                    height,
-                )
-
-                tile = image[
-                    offset_y:end_y,
-                    offset_x:end_x,
-                    :,
-                ]
-
-                tile_height = (
-                    end_y - offset_y
-                )
-
-                tile_width = (
-                    end_x - offset_x
-                )
-
-                prepared, meta = (
-                    self._prepare_rgb(
-                        tile
-                    )
-                )
-
-                # =================================================
-                # ADD ORIGINAL TILE LOCATION METADATA
-                # =================================================
-
-                meta = dict(meta)
-
-                meta.update(
-                    {
-                        "offset_x": int(
-                            offset_x
-                        ),
-
-                        "offset_y": int(
-                            offset_y
-                        ),
-
-                        "tile_width": int(
-                            tile_width
-                        ),
-
-                        "tile_height": int(
-                            tile_height
-                        ),
-
-                        "source_width": int(
-                            width
-                        ),
-
-                        "source_height": int(
-                            height
-                        ),
-                    }
-                )
-
-                yield {
-                    "input": prepared,
-                    "meta": meta,
-
-                    "offset_x": int(
-                        offset_x
-                    ),
-
-                    "offset_y": int(
-                        offset_y
-                    ),
-
-                    "tile_width": int(
-                        tile_width
-                    ),
-
-                    "tile_height": int(
-                        tile_height
-                    ),
-                }
-
-    # ========================================================
-    # LOAD IMAGE FROM PATH + PREPARE
-    # ========================================================
-
-    def load_and_prepare(
-        self,
-        image_path,
-    ):
-        """
-        السلوك القديم:
-        تحميل الصورة وتجهيزها مباشرة إلى 1024x1024.
-
-        نحافظ عليه للتوافق مع الكود الحالي.
-        """
-
-        image = self.load_rgb(
-            image_path
-        )
-
-        return self._prepare_rgb(
-            image
-        )
-
-    # ========================================================
-    # PREPARE NUMPY IMAGE
-    # ========================================================
-
-    def prepare(
-        self,
-        image,
-    ):
-        """
-        تجهيز صورة RGB موجودة مسبقًا.
-        """
-
-        return self._prepare_rgb(
-            image
-        )
-
-    # ========================================================
-    # PREPARE IMAGE TILES FROM PATH
-    # ========================================================
-
-    def iter_tiles_from_path(
-        self,
-        image_path,
-        overlap=0.15,
-        tile_size=None,
-    ):
-        """
-        تحميل الصورة الأصلية ثم إرجاع Tiles.
-
-        Generator حتى لا يتم إنشاء كل القطع
-        في الذاكرة دفعة واحدة.
-        """
-
-        image = self.load_rgb(
-            image_path
-        )
-
-        yield from self.iter_tiles(
-            image=image,
-            overlap=overlap,
-            tile_size=tile_size,
-        )
+        assert (
+            0 <= tile["offset_y"] <= height
+    )
