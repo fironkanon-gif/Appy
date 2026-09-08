@@ -86,6 +86,7 @@ jobs:
               ccache
 
             echo "===== INSTALLED VERSIONS ====="
+
             java -version
             python3 --version
             git --version
@@ -105,7 +106,6 @@ jobs:
             mkdir -p ~/.buildozer
             mkdir -p ~/.gradle
 
-            export USE_CCACHE=1
             ccache -M 2G || true
 
             echo "Build cache configured."
@@ -169,6 +169,7 @@ jobs:
             test -f services/text_decoder.py
 
             echo "===== FILE SIZES ====="
+
             ls -lh models/gothic_ocr.tflite
             ls -lh data/labels.json
             ls -lh fonts/NotoSansGothic-Regular.ttf
@@ -187,9 +188,11 @@ jobs:
             source ~/buildozer-venv/bin/activate
 
             echo "===== COMPILING MAIN ====="
+
             python -m py_compile main.py
 
             echo "===== COMPILING SERVICES ====="
+
             python -m compileall -q services
 
             if [ -d tests ]; then
@@ -246,17 +249,160 @@ jobs:
 
             echo "===== SDKMANAGER ====="
 
+            command -v sdkmanager || true
+
             if command -v sdkmanager >/dev/null 2>&1; then
               sdkmanager --version
             else
-              echo "WARNING: sdkmanager is not available in PATH"
+              echo "WARNING: sdkmanager is not directly available in PATH"
             fi
 
             echo "Android SDK validation completed."
 
 
       # ============================================================
-      # 10. FINAL PRE-BUILD CHECK
+      # 10. INSTALL ANDROID BUILD TOOLS + FIX AIDL
+      # ============================================================
+      - run:
+          name: Install and verify Android Build Tools and AIDL
+          command: |
+            set -eux
+
+            echo "===== ANDROID SDK SETUP ====="
+
+            export ANDROID_SDK_ROOT="${ANDROID_HOME}"
+
+            echo "ANDROID_HOME=${ANDROID_HOME}"
+            echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}"
+
+            # --------------------------------------------------------
+            # FIND SDKMANAGER SAFELY
+            # --------------------------------------------------------
+
+            SDKMANAGER=""
+
+            if command -v sdkmanager >/dev/null 2>&1; then
+              SDKMANAGER="$(command -v sdkmanager)"
+            fi
+
+            if [ -z "${SDKMANAGER}" ]; then
+              for candidate in \
+                "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" \
+                "${ANDROID_HOME}/cmdline-tools/bin/sdkmanager" \
+                "${ANDROID_HOME}/tools/bin/sdkmanager"
+              do
+                if [ -x "${candidate}" ]; then
+                  SDKMANAGER="${candidate}"
+                  break
+                fi
+              done
+            fi
+
+            if [ -z "${SDKMANAGER}" ]; then
+              echo "ERROR: sdkmanager could not be found."
+              echo "ANDROID_HOME=${ANDROID_HOME}"
+
+              find "${ANDROID_HOME}" \
+                -type f \
+                -name sdkmanager \
+                -print 2>/dev/null || true
+
+              exit 1
+            fi
+
+            echo "SDKMANAGER=${SDKMANAGER}"
+
+            echo "===== SDKMANAGER VERSION ====="
+
+            "${SDKMANAGER}" --version
+
+
+            # --------------------------------------------------------
+            # ACCEPT LICENSES
+            # --------------------------------------------------------
+
+            echo "===== ACCEPT ANDROID LICENSES ====="
+
+            yes | "${SDKMANAGER}" \
+              --sdk_root="${ANDROID_HOME}" \
+              --licenses || true
+
+
+            # --------------------------------------------------------
+            # INSTALL REQUIRED SDK COMPONENTS
+            # --------------------------------------------------------
+
+            echo "===== INSTALL PLATFORM TOOLS ====="
+
+            "${SDKMANAGER}" \
+              --sdk_root="${ANDROID_HOME}" \
+              "platform-tools"
+
+
+            echo "===== INSTALL ANDROID API 35 ====="
+
+            "${SDKMANAGER}" \
+              --sdk_root="${ANDROID_HOME}" \
+              "platforms;android-35"
+
+
+            echo "===== INSTALL BUILD TOOLS 35.0.0 ====="
+
+            "${SDKMANAGER}" \
+              --sdk_root="${ANDROID_HOME}" \
+              "build-tools;35.0.0"
+
+
+            # --------------------------------------------------------
+            # VERIFY AIDL
+            # --------------------------------------------------------
+
+            echo "===== VERIFY AIDL ====="
+
+            AIDL_PATH="${ANDROID_HOME}/build-tools/35.0.0/aidl"
+
+            if [ ! -f "${AIDL_PATH}" ]; then
+              echo "ERROR: AIDL was not found."
+
+              echo "===== SEARCHING FOR AIDL ====="
+
+              find "${ANDROID_HOME}" \
+                -type f \
+                -name aidl \
+                -print 2>/dev/null || true
+
+              exit 1
+            fi
+
+            chmod +x "${AIDL_PATH}" || true
+
+            echo "AIDL_PATH=${AIDL_PATH}"
+
+            ls -lh "${AIDL_PATH}"
+
+            echo "===== AIDL VERIFIED SUCCESSFULLY ====="
+
+
+            # --------------------------------------------------------
+            # SHOW INSTALLED BUILD TOOLS
+            # --------------------------------------------------------
+
+            echo "===== INSTALLED BUILD TOOLS ====="
+
+            ls -la "${ANDROID_HOME}/build-tools" || true
+
+            echo "===== ALL AVAILABLE AIDL FILES ====="
+
+            find "${ANDROID_HOME}/build-tools" \
+              -type f \
+              -name aidl \
+              -print 2>/dev/null || true
+
+            echo "ANDROID BUILD TOOLS AND AIDL READY"
+
+
+      # ============================================================
+      # 11. FINAL PRE-BUILD CHECK
       # ============================================================
       - run:
           name: Final pre-build verification
@@ -276,22 +422,36 @@ jobs:
             buildozer --version
 
             echo "===== GIT ====="
+
             git --version
 
             echo "===== JAVA ====="
+
             java -version
 
             echo "===== DISK ====="
+
             df -h
 
             echo "===== MEMORY ====="
+
             free -h || true
+
+            echo "===== ANDROID SDK ====="
+
+            echo "ANDROID_HOME=${ANDROID_HOME}"
+
+            echo "===== VERIFY AIDL ONE LAST TIME ====="
+
+            test -f "${ANDROID_HOME}/build-tools/35.0.0/aidl"
+
+            echo "AIDL IS AVAILABLE"
 
             echo "PRE-BUILD VALIDATION PASSED"
 
 
       # ============================================================
-      # 11. BUILD APK
+      # 12. BUILD APK
       # ============================================================
       - run:
           name: Build Android APK
@@ -303,15 +463,52 @@ jobs:
 
             export USE_CCACHE=1
 
+            # --------------------------------------------------------
+            # FORCE ANDROID ENVIRONMENT
+            # --------------------------------------------------------
+
+            export ANDROIDSDK="${ANDROID_HOME}"
+            export ANDROID_SDK_ROOT="${ANDROID_HOME}"
+
+            export ANDROIDAPI=35
+            export ANDROIDMINAPI=23
+
+            export PATH="${ANDROID_HOME}/platform-tools:${ANDROID_HOME}/build-tools/35.0.0:${PATH}"
+
+
             echo "===== ACTIVE ENVIRONMENT ====="
+
+            echo "ANDROIDSDK=${ANDROIDSDK}"
+            echo "ANDROID_HOME=${ANDROID_HOME}"
+            echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}"
+
+            echo "===== TOOL PATHS ====="
 
             command -v python
             command -v cython
             command -v buildozer
+            command -v aidl
+
+
+            echo "===== TOOL VERSIONS ====="
 
             python --version
             cython --version
             buildozer --version
+
+
+            echo "===== VERIFY AIDL BEFORE BUILD ====="
+
+            AIDL_PATH="${ANDROID_HOME}/build-tools/35.0.0/aidl"
+
+            test -f "${AIDL_PATH}"
+
+            chmod +x "${AIDL_PATH}" || true
+
+            ls -lh "${AIDL_PATH}"
+
+            echo "AIDL READY FOR BUILD"
+
 
             echo "===== START BUILD ====="
 
@@ -319,7 +516,7 @@ jobs:
 
 
       # ============================================================
-      # 12. VERIFY APK
+      # 13. VERIFY APK
       # ============================================================
       - run:
           name: Verify generated APK
@@ -335,7 +532,11 @@ jobs:
 
             echo "===== GENERATED FILES ====="
 
-            find bin -type f -maxdepth 2 -print
+            find bin \
+              -maxdepth 2 \
+              -type f \
+              -print
+
 
             echo "===== APK FILES ====="
 
@@ -344,21 +545,28 @@ jobs:
               -name "*.apk" \
               -print
 
+
             APK_COUNT=$(find bin -type f -name "*.apk" | wc -l)
 
-            if [ "$APK_COUNT" -lt 1 ]; then
+            if [ "${APK_COUNT}" -lt 1 ]; then
               echo "ERROR: No APK was generated"
               exit 1
             fi
 
+
             echo "===== APK SIZE ====="
-            find bin -type f -name "*.apk" -exec ls -lh {} \;
+
+            find bin \
+              -type f \
+              -name "*.apk" \
+              -exec ls -lh {} \;
+
 
             echo "APK BUILD SUCCESSFUL"
 
 
       # ============================================================
-      # 13. SAVE APK
+      # 14. SAVE APK
       # ============================================================
       - store_artifacts:
           path: bin
