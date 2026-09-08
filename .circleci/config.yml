@@ -216,25 +216,101 @@ jobs:
             echo "Python syntax validation successful."
 
 
-      # ============================================================
-      # 8. RUN PROJECT TESTS
+            # ============================================================
+      # RUN PYTHON TESTS
       # ============================================================
       - run:
           name: Run Python tests
           command: |
-            set -eux
+            set -eo pipefail
+
+            echo "=========================================="
+            echo " ENTERING PROJECT DIRECTORY"
+            echo "=========================================="
+
+            cd ~/project
+
+            echo "Current directory:"
+            pwd
+
+            echo ""
+            echo "Project files:"
+            ls -la
+
+            echo ""
+            echo "=========================================="
+            echo " ACTIVATING VIRTUAL ENVIRONMENT"
+            echo "=========================================="
 
             source ~/buildozer-venv/bin/activate
 
-            echo "===== VERIFYING NUMPY BEFORE TESTS ====="
+            echo ""
+            echo "Python version:"
+            python --version
+
+            echo ""
+            echo "Pip version:"
+            pip --version
+
+            echo ""
+            echo "=========================================="
+            echo " VERIFYING NUMPY BEFORE TESTS"
+            echo "=========================================="
 
             python -c "import numpy; print('NumPy is ready:', numpy.__version__)"
 
-            echo "===== RUNNING PYTEST ====="
+            echo ""
+            echo "=========================================="
+            echo " FIXING PROJECT PYTHON PATH"
+            echo "=========================================="
 
-            pytest -q
+            export PYTHONPATH="$HOME/project:${PYTHONPATH:-}"
 
-            echo "===== ALL TESTS PASSED ====="
+            echo "PYTHONPATH:"
+            echo "$PYTHONPATH"
+
+            echo ""
+            echo "=========================================="
+            echo " CHECKING SERVICES DIRECTORY"
+            echo "=========================================="
+
+            if [ -d "services" ]; then
+              echo "services directory found."
+
+              echo ""
+              echo "Contents of services:"
+              ls -la services
+
+              if [ ! -f "services/__init__.py" ]; then
+                echo ""
+                echo "Adding compatibility __init__.py..."
+
+                touch services/__init__.py
+              else
+                echo ""
+                echo "services/__init__.py already exists."
+              fi
+
+            else
+              echo "ERROR: services directory not found!"
+              exit 1
+            fi
+
+            echo ""
+            echo "=========================================="
+            echo " VERIFYING SERVICES IMPORT"
+            echo "=========================================="
+
+            python -c "import services; print('Services package is ready')"
+
+            python -c "from services.image_service import ImageService; print('ImageService import is ready')"
+
+            echo ""
+            echo "=========================================="
+            echo " RUNNING PYTEST"
+            echo "=========================================="
+
+            python -m pytest -q
 
 
       # ============================================================
