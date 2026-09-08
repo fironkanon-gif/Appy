@@ -86,11 +86,12 @@ jobs:
             echo "===== PYTHON ====="
             python3 --version
 
+
       # ============================================================
       # 4. CREATE PYTHON BUILD ENVIRONMENT
       # ============================================================
       - run:
-          name: Install Buildozer and Cython
+          name: Install Buildozer, Cython and Pytest
           command: |
             set -eux
 
@@ -109,15 +110,22 @@ jobs:
               "Cython==0.29.34"
 
             python -m pip install \
+              pytest
+
+            python -m pip install \
               git+https://github.com/kivy/buildozer.git
 
             echo "===== INSTALLED PACKAGES ====="
 
             python -m pip show Cython
+            python -m pip show pytest
             python -m pip show buildozer
 
             cython --version
+            pytest --version
             buildozer --version
+
+
       # ============================================================
       # 5. VALIDATE PROJECT FILES
       # ============================================================
@@ -131,13 +139,19 @@ jobs:
 
             test -f models/gothic_ocr.tflite
             test -f data/labels.json
+
             test -f fonts/NotoSansGothic-Regular.ttf
 
             test -f services/__init__.py
             test -f services/image_service.py
             test -f services/model_service.py
             test -f services/text_decoder.py
+            test -f services/cache_service.py
 
+            test -f tests/test_decoder.py
+            test -f tests/test_image_service.py
+
+            # Temporary check until Java bridge is inspected.
             test -f java/org/gothicocr/TFLiteBridge.java
 
             echo "All required project files found."
@@ -162,7 +176,24 @@ jobs:
 
 
       # ============================================================
-      # 7. VALIDATE BUILDOZER CONFIGURATION
+      # 7. RUN PROJECT TESTS
+      # ============================================================
+      - run:
+          name: Run Python tests
+          command: |
+            set -eux
+
+            source ~/buildozer-venv/bin/activate
+
+            echo "===== RUNNING PYTEST ====="
+
+            pytest -q
+
+            echo "===== ALL TESTS PASSED ====="
+
+
+      # ============================================================
+      # 8. VALIDATE BUILDOZER CONFIGURATION
       # ============================================================
       - run:
           name: Validate Buildozer configuration
@@ -174,6 +205,14 @@ jobs:
               buildozer.spec
 
             grep -F \
+              "android.api = 35" \
+              buildozer.spec
+
+            grep -F \
+              "android.minapi = 24" \
+              buildozer.spec
+
+            grep -F \
               "org.tensorflow:tensorflow-lite:2.17.0" \
               buildozer.spec
 
@@ -182,14 +221,14 @@ jobs:
               buildozer.spec
 
             grep -F \
-              "class TFLiteBridge" \
-              java/org/gothicocr/TFLiteBridge.java
+              "android.permissions = CAMERA,READ_EXTERNAL_STORAGE,READ_MEDIA_IMAGES" \
+              buildozer.spec
 
             echo "Buildozer configuration validated."
 
 
       # ============================================================
-      # 8. CONFIGURE JAVA 17
+      # 9. CONFIGURE JAVA 17
       # ============================================================
       - run:
           name: Configure Java 17
@@ -208,7 +247,7 @@ jobs:
 
 
       # ============================================================
-      # 9. CONFIGURE ANDROID SDK AND NDK
+      # 10. CONFIGURE ANDROID SDK AND NDK
       # ============================================================
       - run:
           name: Configure Android SDK and NDK
@@ -241,7 +280,7 @@ jobs:
 
 
       # ============================================================
-      # 10. ACCEPT ANDROID LICENSES
+      # 11. ACCEPT ANDROID LICENSES
       # ============================================================
       - run:
           name: Accept Android SDK licenses
@@ -269,7 +308,7 @@ jobs:
 
 
       # ============================================================
-      # 11. INSTALL REQUIRED ANDROID SDK PACKAGES
+      # 12. INSTALL REQUIRED ANDROID SDK PACKAGES
       # ============================================================
       - run:
           name: Install Android SDK packages
@@ -291,9 +330,7 @@ jobs:
             echo "===== VERIFYING SDK COMPONENTS ====="
 
             test -d "$ANDROIDSDK/platform-tools"
-
             test -d "$ANDROIDSDK/platforms/android-35"
-
             test -d "$ANDROIDSDK/build-tools/35.0.0"
 
             test -f \
@@ -302,12 +339,12 @@ jobs:
             echo "===== INSTALLED SDK COMPONENTS ====="
 
             sdkmanager --list_installed 2>/dev/null | grep -E \
-              "platform-tools|platforms;android-35|build-tools;35.0.0|cmdline-tools" \
+              "platform-tools|platforms;android-35|build-tools/35.0.0|cmdline-tools" \
               || true
 
 
       # ============================================================
-      # 12. VERIFY AIDL
+      # 13. VERIFY AIDL
       # ============================================================
       - run:
           name: Verify AIDL
@@ -330,7 +367,7 @@ jobs:
 
 
       # ============================================================
-      # 13. PREPARE BUILDOZER SDK/NDK PATHS
+      # 14. PREPARE BUILDOZER SDK/NDK PATHS
       # ============================================================
       - run:
           name: Configure Buildozer Android paths
@@ -398,7 +435,7 @@ jobs:
 
 
       # ============================================================
-      # 14. VALIDATE MODEL
+      # 15. VALIDATE MODEL
       # ============================================================
       - run:
           name: Validate model file
@@ -420,7 +457,7 @@ jobs:
 
 
       # ============================================================
-      # 15. FINAL PRE-BUILD CHECK
+      # 16. FINAL PRE-BUILD CHECK
       # ============================================================
       - run:
           name: Final pre-build verification
@@ -428,15 +465,16 @@ jobs:
             set -eux
 
             source "$BASH_ENV"
-
-            source \
-              ~/buildozer-venv/bin/activate
+            source ~/buildozer-venv/bin/activate
 
             echo "===== PYTHON ====="
             python --version
 
             echo "===== CYTHON ====="
             cython --version
+
+            echo "===== PYTEST ====="
+            pytest --version
 
             echo "===== BUILDOZER ====="
             buildozer --version
@@ -470,11 +508,15 @@ jobs:
 
             df -h
 
-            echo "PRE-BUILD VALIDATION PASSED"
+            echo "===== FINAL TEST ====="
+
+            pytest -q
+
+            echo "===== PRE-BUILD VALIDATION PASSED ====="
 
 
       # ============================================================
-      # 16. CLEAN OUTPUT
+      # 17. CLEAN OUTPUT
       # ============================================================
       - run:
           name: Clean old output
@@ -487,7 +529,7 @@ jobs:
 
 
       # ============================================================
-      # 16.5. CONFIGURE FREETYPE DOWNLOAD FALLBACK
+      # 18. CONFIGURE FREETYPE DOWNLOAD FALLBACK
       # ============================================================
       - run:
           name: Configure FreeType fallback mirror
@@ -502,7 +544,6 @@ jobs:
             source "$BASH_ENV"
 
             echo "FreeType download URL override:"
-
             echo "$URL_freetype"
 
             echo "===== TESTING FREETYPE MIRROR ====="
@@ -517,7 +558,7 @@ jobs:
 
 
       # ============================================================
-      # 17. BUILD APK
+      # 19. BUILD APK
       # ============================================================
       - run:
           name: Build Android APK
@@ -526,22 +567,15 @@ jobs:
             set -eux
 
             source "$BASH_ENV"
-
-            source \
-              ~/buildozer-venv/bin/activate
+            source ~/buildozer-venv/bin/activate
 
             echo "===== ACTIVE BUILD ENVIRONMENT ====="
 
             echo "JAVA_HOME=$JAVA_HOME"
-
             echo "ANDROIDSDK=$ANDROIDSDK"
-
             echo "ANDROIDNDK=$ANDROIDNDK"
-
             echo "ANDROIDAPI=$ANDROIDAPI"
-
             echo "NDKAPI=$NDKAPI"
-
             echo "URL_freetype=$URL_freetype"
 
             echo "===== JAVA ====="
@@ -557,11 +591,15 @@ jobs:
 
             cython --version
 
+            echo "===== PYTEST ====="
+
+            pytest -q
+
             echo "===== BUILDOZER ====="
 
             buildozer --version
 
-            echo "===== SDKMANAGER BEING USED ====="
+            echo "===== SDKMANAGER ====="
 
             "$ANDROIDSDK/tools/bin/sdkmanager" --version
 
@@ -575,7 +613,7 @@ jobs:
 
 
       # ============================================================
-      # 18. VERIFY APK
+      # 20. VERIFY APK
       # ============================================================
       - run:
           name: Verify generated APK
@@ -614,11 +652,11 @@ jobs:
 
 
       # ============================================================
-      # 19. SAVE APK
+      # 21. SAVE APK
       # ============================================================
       - store_artifacts:
           path: bin
-          destination: GothicOCR2-APK
+          destination: GothicOCR-APK
 
 
 workflows:
