@@ -1,6 +1,11 @@
 # ============================================================
 # GOTHIC OCR — TEXT DECODER
-# Model Output + NMS + Line Grouping + Text Reconstruction
+# Compatible with:
+# - TFLite YOLO output [1, 29, 21504]
+# - ImageService metadata
+# - Tiled inference
+# - Global NMS
+# - Text reconstruction
 # ============================================================
 
 from pathlib import Path
@@ -11,18 +16,14 @@ import numpy as np
 
 class TextDecoder:
     """
-    Decode GothicOCR TensorFlow Lite model output.
+    Decode GothicOCR model output.
 
-    Supported features:
-    - YOLO-style output decoding
-    - Normalized / pixel coordinate handling
-    - Letterbox coordinate restoration
-    - Class-aware NMS
-    - Tile result merging
-    - Detection sorting
-    - Line grouping
-    - Word spacing
-    - Text reconstruction
+    Expected model output:
+        [1, 29, 21504]
+
+    29 channels:
+        4 bounding box values
+        25 class scores
     """
 
     INPUT_SIZE = 1024
@@ -30,10 +31,6 @@ class TextDecoder:
 
     CONFIDENCE_THRESHOLD = 0.05
     NMS_IOU_THRESHOLD = 0.45
-
-    # ============================================================
-    # INIT
-    # ============================================================
 
     def __init__(
         self,
@@ -44,31 +41,52 @@ class TextDecoder:
     ):
 
         if labels_path is None:
+
             labels_path = (
-                Path(__file__).resolve()
-                .parent.parent
+                Path(__file__)
+                .resolve()
+                .parent
+                .parent
                 / "data"
                 / "labels.json"
             )
 
-        self.labels_path = Path(labels_path)
+        self.labels_path = Path(
+            labels_path
+        )
 
-        self.labels = self._load_labels()
+        self.labels = (
+            self._load_labels()
+        )
 
         self.confidence_threshold = (
-            float(confidence_threshold)
-            if confidence_threshold is not None
+
+            float(
+                confidence_threshold
+            )
+
+            if confidence_threshold
+            is not None
+
             else self.CONFIDENCE_THRESHOLD
         )
 
         self.nms_iou_threshold = (
-            float(nms_iou_threshold)
-            if nms_iou_threshold is not None
+
+            float(
+                nms_iou_threshold
+            )
+
+            if nms_iou_threshold
+            is not None
+
             else self.NMS_IOU_THRESHOLD
         )
 
-        self.space_threshold_factor = float(
-            space_threshold_factor
+        self.space_threshold_factor = (
+            float(
+                space_threshold_factor
+            )
         )
 
         if not (
@@ -76,9 +94,10 @@ class TextDecoder:
             <= self.confidence_threshold
             <= 1.0
         ):
+
             raise ValueError(
-                "confidence_threshold must be "
-                "between 0 and 1."
+                "confidence_threshold "
+                "must be between 0 and 1."
             )
 
         if not (
@@ -86,15 +105,20 @@ class TextDecoder:
             <= self.nms_iou_threshold
             <= 1.0
         ):
+
             raise ValueError(
-                "nms_iou_threshold must be "
-                "between 0 and 1."
+                "nms_iou_threshold "
+                "must be between 0 and 1."
             )
 
-        if self.space_threshold_factor < 0:
+        if (
+            self.space_threshold_factor
+            < 0.0
+        ):
+
             raise ValueError(
-                "space_threshold_factor must "
-                "be >= 0."
+                "space_threshold_factor "
+                "must be >= 0."
             )
 
     # ============================================================
@@ -104,8 +128,9 @@ class TextDecoder:
     def _load_labels(self):
 
         if not self.labels_path.is_file():
+
             raise FileNotFoundError(
-                f"Labels file not found: "
+                "Labels file not found: "
                 f"{self.labels_path}"
             )
 
@@ -116,7 +141,9 @@ class TextDecoder:
                 encoding="utf-8",
             ) as file:
 
-                labels = json.load(file)
+                labels = json.load(
+                    file
+                )
 
         except json.JSONDecodeError as exc:
 
@@ -129,40 +156,43 @@ class TextDecoder:
             labels,
             list,
         ):
+
             raise ValueError(
                 "labels.json must contain "
                 "a list."
             )
 
-        if len(labels) != self.NUM_CLASSES:
+        if len(labels) != (
+            self.NUM_CLASSES
+        ):
+
             raise ValueError(
-                f"Expected {self.NUM_CLASSES} "
-                f"labels, found {len(labels)}."
+                f"Expected "
+                f"{self.NUM_CLASSES} labels, "
+                f"found {len(labels)}."
             )
 
-        cleaned_labels = []
+        labels = [
 
-        for label in labels:
+            str(label)
 
-            if not isinstance(
-                label,
-                str,
-            ):
-                label = str(label)
+            for label
+            in labels
 
-            label = label.strip()
+        ]
 
-            if not label:
-                raise ValueError(
-                    "labels.json contains "
-                    "an empty label."
-                )
+        if any(
+            not label
+            for label
+            in labels
+        ):
 
-            cleaned_labels.append(
-                label
+            raise ValueError(
+                "labels.json contains "
+                "an empty label."
             )
 
-        return cleaned_labels
+        return labels
 
     # ============================================================
     # IOU
@@ -219,74 +249,61 @@ class TextDecoder:
         )
 
         intersection = (
+
             intersection_width
             * intersection_height
+
         )
 
         area_a = (
+
             max(
                 0.0,
                 ax2 - ax1,
             )
-            * max(
+
+            *
+
+            max(
                 0.0,
                 ay2 - ay1,
             )
+
         )
 
         area_b = (
+
             max(
                 0.0,
                 bx2 - bx1,
             )
-            * max(
+
+            *
+
+            max(
                 0.0,
                 by2 - by1,
             )
+
         )
 
         union = (
+
             area_a
             + area_b
             - intersection
+
         )
 
         if union <= 0.0:
+
             return 0.0
 
         return (
+
             intersection
             / union
-        )
 
-    # ============================================================
-    # SORT DETECTIONS
-    # ============================================================
-
-    def sort_detections(
-        self,
-        detections,
-    ):
-
-        if not detections:
-            return []
-
-        return sorted(
-            detections,
-            key=lambda detection: (
-                (
-                    float(
-                        detection["box"][1]
-                    )
-                    + float(
-                        detection["box"][3]
-                    )
-                )
-                / 2.0,
-                float(
-                    detection["box"][0]
-                ),
-            ),
         )
 
     # ============================================================
@@ -299,6 +316,7 @@ class TextDecoder:
     ):
 
         if not detections:
+
             return []
 
         class_groups = {}
@@ -306,7 +324,9 @@ class TextDecoder:
         for detection in detections:
 
             class_id = int(
-                detection["class_id"]
+                detection[
+                    "class_id"
+                ]
             )
 
             class_groups.setdefault(
@@ -318,19 +338,29 @@ class TextDecoder:
 
         kept = []
 
-        for group in class_groups.values():
+        for group in (
+            class_groups.values()
+        ):
 
-            remaining = sorted(
+            group = sorted(
+
                 group,
-                key=lambda item: float(
-                    item["score"]
+
+                key=lambda item:
+                float(
+                    item.get(
+                        "score",
+                        0.0,
+                    )
                 ),
+
                 reverse=True,
+
             )
 
-            while remaining:
+            while group:
 
-                best = remaining.pop(
+                best = group.pop(
                     0
                 )
 
@@ -338,300 +368,290 @@ class TextDecoder:
                     best
                 )
 
-                survivors = []
+                remaining = []
 
-                for other in remaining:
+                for other in group:
 
                     overlap = self.iou(
-                        best["box"],
-                        other["box"],
+
+                        best[
+                            "box"
+                        ],
+
+                        other[
+                            "box"
+                        ],
+
                     )
 
-                    if (
-                        overlap
-                        < self.nms_iou_threshold
+                    if overlap < (
+
+                        self
+                        .nms_iou_threshold
+
                     ):
-                        survivors.append(
+
+                        remaining.append(
                             other
                         )
 
-                remaining = survivors
+                group = remaining
 
-        return self.sort_detections(
-            kept
+        kept.sort(
+
+            key=lambda item: (
+
+                (
+                    float(
+                        item[
+                            "box"
+                        ][1]
+                    )
+
+                    +
+
+                    float(
+                        item[
+                            "box"
+                        ][3]
+                    )
+
+                )
+
+                / 2.0,
+
+                float(
+                    item[
+                        "box"
+                    ][0]
+                ),
+
+            )
+
         )
 
-    # ============================================================
-    # MERGE DETECTIONS
-    # ============================================================
-
-    def merge_detections(
-        self,
-        detections,
-    ):
-        """
-        Merge detections from multiple tiles.
-
-        Duplicate detections created by tile overlap
-        are removed using global class-aware NMS.
-        """
-
-        if not detections:
-            return []
-
-        return self.nms(
-            detections
-        )
+        return kept
 
     # ============================================================
-    # BOX TO MODEL CANVAS
+    # BOX NORMALIZATION
     # ============================================================
 
     def _box_to_canvas(
         self,
         x,
         y,
-        w,
-        h,
+        width,
+        height,
     ):
 
-        values = np.asarray(
+        values = np.array(
+
             [
                 x,
                 y,
-                w,
-                h,
+                width,
+                height,
             ],
+
             dtype=np.float32,
+
         )
 
-        if not np.all(
-            np.isfinite(values)
-        ):
-            raise ValueError(
-                "Box contains invalid values."
-            )
-
-        # Normalized coordinates
         if np.all(
             np.abs(values)
             <= 1.5
         ):
 
             canvas_x = (
-                float(x)
+                x
                 * self.INPUT_SIZE
             )
 
             canvas_y = (
-                float(y)
+                y
                 * self.INPUT_SIZE
             )
 
-            canvas_w = (
-                float(w)
+            canvas_width = (
+                width
                 * self.INPUT_SIZE
             )
 
-            canvas_h = (
-                float(h)
+            canvas_height = (
+                height
                 * self.INPUT_SIZE
             )
 
-        # Pixel coordinates
         else:
 
-            canvas_x = float(x)
-            canvas_y = float(y)
-            canvas_w = float(w)
-            canvas_h = float(h)
+            canvas_x = x
+
+            canvas_y = y
+
+            canvas_width = width
+
+            canvas_height = height
 
         return (
-            canvas_x,
-            canvas_y,
-            canvas_w,
-            canvas_h,
+
+            float(
+                canvas_x
+            ),
+
+            float(
+                canvas_y
+            ),
+
+            float(
+                canvas_width
+            ),
+
+            float(
+                canvas_height
+            ),
+
         )
 
     # ============================================================
-    # META VALUE
+    # EXTRACT IMAGE METADATA
     # ============================================================
 
     @staticmethod
-    def _meta_value(
+    def _extract_meta(
         meta,
-        names,
-        default=None,
     ):
+
+        if meta is None:
+
+            raise ValueError(
+                "Image metadata is required."
+            )
 
         if not isinstance(
             meta,
             dict,
         ):
-            return default
-
-        for name in names:
-
-            if name in meta:
-                return meta[name]
-
-        return default
-
-    # ============================================================
-    # EXTRACT META
-    # ============================================================
-
-    def _extract_meta(
-        self,
-        meta=None,
-        original_width=None,
-        original_height=None,
-        scale=None,
-        pad_x=None,
-        pad_y=None,
-    ):
-        """
-        Support both decoder APIs:
-
-        Old:
-            decode(
-                output,
-                original_width,
-                original_height,
-                scale,
-                pad_x,
-                pad_y
-            )
-
-        New:
-            decode(
-                output,
-                meta=meta
-            )
-        """
-
-        if meta is not None:
-
-            if original_width is None:
-
-                original_width = (
-                    self._meta_value(
-                        meta,
-                        [
-                            "original_width",
-                            "width",
-                            "image_width",
-                            "tile_width",
-                        ],
-                    )
-                )
-
-            if original_height is None:
-
-                original_height = (
-                    self._meta_value(
-                        meta,
-                        [
-                            "original_height",
-                            "height",
-                            "image_height",
-                            "tile_height",
-                        ],
-                    )
-                )
-
-            if scale is None:
-
-                scale = self._meta_value(
-                    meta,
-                    [
-                        "scale",
-                        "resize_scale",
-                    ],
-                    1.0,
-                )
-
-            if pad_x is None:
-
-                pad_x = self._meta_value(
-                    meta,
-                    [
-                        "pad_x",
-                        "padding_x",
-                    ],
-                    0.0,
-                )
-
-            if pad_y is None:
-
-                pad_y = self._meta_value(
-                    meta,
-                    [
-                        "pad_y",
-                        "padding_y",
-                    ],
-                    0.0,
-                )
-
-        if original_width is None:
-            original_width = self.INPUT_SIZE
-
-        if original_height is None:
-            original_height = self.INPUT_SIZE
-
-        if scale is None:
-            scale = 1.0
-
-        if pad_x is None:
-            pad_x = 0.0
-
-        if pad_y is None:
-            pad_y = 0.0
-
-        try:
-
-            original_width = int(
-                original_width
-            )
-
-            original_height = int(
-                original_height
-            )
-
-            scale = float(
-                scale
-            )
-
-            pad_x = float(
-                pad_x
-            )
-
-            pad_y = float(
-                pad_y
-            )
-
-        except (
-            TypeError,
-            ValueError,
-        ) as exc:
 
             raise ValueError(
-                "Invalid image metadata."
-            ) from exc
+                "Image metadata must "
+                "be a dictionary."
+            )
+
+        original_width = meta.get(
+            "original_width"
+        )
+
+        original_height = meta.get(
+            "original_height"
+        )
+
+        if original_width is None:
+
+            original_width = meta.get(
+                "width"
+            )
+
+        if original_height is None:
+
+            original_height = meta.get(
+                "height"
+            )
+
+        scale = meta.get(
+            "scale"
+        )
+
+        pad_x = meta.get(
+            "pad_x",
+            0.0,
+        )
+
+        pad_y = meta.get(
+            "pad_y",
+            0.0,
+        )
+
+        if original_width is None:
+
+            raise ValueError(
+                "Metadata missing "
+                "original_width."
+            )
+
+        if original_height is None:
+
+            raise ValueError(
+                "Metadata missing "
+                "original_height."
+            )
+
+        if scale is None:
+
+            raise ValueError(
+                "Metadata missing scale."
+            )
+
+        return (
+
+            int(
+                original_width
+            ),
+
+            int(
+                original_height
+            ),
+
+            float(
+                scale
+            ),
+
+            float(
+                pad_x
+            ),
+
+            float(
+                pad_y
+            ),
+
+        )
+
+    # ============================================================
+    # DECODE
+    # ============================================================
+
+    def decode(
+        self,
+        output,
+        meta,
+    ):
+
+        (
+            original_width,
+            original_height,
+            scale,
+            pad_x,
+            pad_y,
+        ) = self._extract_meta(
+            meta
+        )
 
         if (
             original_width <= 0
             or original_height <= 0
         ):
+
             raise ValueError(
-                "original_width and "
-                "original_height must be > 0."
+                "Invalid original "
+                "image dimensions."
             )
 
         if (
-            not np.isfinite(scale)
+            not np.isfinite(
+                scale
+            )
             or scale <= 0.0
         ):
+
             raise ValueError(
                 f"Invalid image scale: "
                 f"{scale}"
@@ -649,73 +669,20 @@ class TextDecoder:
                 "invalid values."
             )
 
-        return (
-            original_width,
-            original_height,
-            scale,
-            pad_x,
-            pad_y,
-        )
-
-    # ============================================================
-    # DECODE
-    # ============================================================
-
-    def decode(
-        self,
-        output,
-        original_width=None,
-        original_height=None,
-        scale=None,
-        pad_x=None,
-        pad_y=None,
-        meta=None,
-    ):
-        """
-        Decode model output.
-
-        Supports:
-
-        decode(
-            output,
-            original_width=...,
-            original_height=...,
-            scale=...,
-            pad_x=...,
-            pad_y=...
-        )
-
-        And:
-
-        decode(
-            output,
-            meta=meta
-        )
-        """
-
-        (
-            original_width,
-            original_height,
-            scale,
-            pad_x,
-            pad_y,
-        ) = self._extract_meta(
-            meta=meta,
-            original_width=original_width,
-            original_height=original_height,
-            scale=scale,
-            pad_x=pad_x,
-            pad_y=pad_y,
-        )
-
         output = np.asarray(
+
             output,
+
             dtype=np.float32,
+
         )
 
         if not np.all(
-            np.isfinite(output)
+            np.isfinite(
+                output
+            )
         ):
+
             raise ValueError(
                 "Model output contains "
                 "NaN or Inf."
@@ -744,12 +711,14 @@ class TextDecoder:
             )
 
         expected_channels = (
+
             4
             + self.NUM_CLASSES
+
         )
 
         # --------------------------------------------------------
-        # MODEL OUTPUT ORIENTATION
+        # OUTPUT FORMAT
         # --------------------------------------------------------
 
         if (
@@ -769,44 +738,56 @@ class TextDecoder:
         else:
 
             raise ValueError(
-                "Expected one output dimension "
-                f"to contain {expected_channels} "
-                "channels. Got: "
-                f"{output.shape}"
+
+                "Expected one output "
+                "dimension to contain "
+
+                f"{expected_channels} channels. "
+
+                f"Got: {output.shape}"
+
             )
 
         # --------------------------------------------------------
-        # EMPTY PREDICTIONS
+        # BOXES + CLASS SCORES
         # --------------------------------------------------------
 
-        if predictions.shape[1] == 0:
-
-            return self.compose_result(
-                []
-            )
-
-        boxes = predictions[:4]
+        boxes = predictions[
+            :4
+        ]
 
         class_scores = predictions[
+
             4:
             4 + self.NUM_CLASSES
+
         ]
 
         scores = np.max(
+
             class_scores,
+
             axis=0,
+
         )
 
         class_ids = np.argmax(
+
             class_scores,
+
             axis=0,
+
         )
 
         positions = np.where(
 
-            np.isfinite(scores)
+            np.isfinite(
+                scores
+            )
 
-            & (
+            &
+
+            (
                 scores
                 >= self.confidence_threshold
             )
@@ -815,125 +796,168 @@ class TextDecoder:
 
         detections = []
 
-        # ========================================================
+        # --------------------------------------------------------
         # DECODE DETECTIONS
-        # ========================================================
+        # --------------------------------------------------------
 
         for position in positions:
 
             x = float(
-                boxes[0, position]
+
+                boxes[
+                    0,
+                    position
+                ]
+
             )
 
             y = float(
-                boxes[1, position]
+
+                boxes[
+                    1,
+                    position
+                ]
+
             )
 
-            w = float(
-                boxes[2, position]
+            width = float(
+
+                boxes[
+                    2,
+                    position
+                ]
+
             )
 
-            h = float(
-                boxes[3, position]
+            height = float(
+
+                boxes[
+                    3,
+                    position
+                ]
+
             )
 
             score = float(
-                scores[position]
+
+                scores[
+                    position
+                ]
+
             )
 
             class_id = int(
-                class_ids[position]
+
+                class_ids[
+                    position
+                ]
+
             )
 
-            values = [
-                x,
-                y,
-                w,
-                h,
-                score,
-            ]
-
             if not np.isfinite(
-                values
+
+                [
+                    x,
+                    y,
+                    width,
+                    height,
+                    score,
+                ]
+
             ).all():
+
                 continue
 
             if (
-                w <= 0.0
-                or h <= 0.0
+
+                width <= 0.0
+                or height <= 0.0
+
             ):
+
                 continue
 
             if not (
+
                 0
                 <= class_id
-                < len(self.labels)
+                < len(
+                    self.labels
+                )
+
             ):
+
                 continue
 
             (
                 canvas_x,
                 canvas_y,
-                canvas_w,
-                canvas_h,
+                canvas_width,
+                canvas_height,
             ) = self._box_to_canvas(
+
                 x,
                 y,
-                w,
-                h,
+                width,
+                height,
+
             )
 
-            # ----------------------------------------------------
-            # XYWH CENTER → XYXY
-            # ----------------------------------------------------
-
             canvas_x1 = (
+
                 canvas_x
-                - canvas_w / 2.0
+                - canvas_width / 2.0
+
             )
 
             canvas_y1 = (
+
                 canvas_y
-                - canvas_h / 2.0
+                - canvas_height / 2.0
+
             )
 
             canvas_x2 = (
+
                 canvas_x
-                + canvas_w / 2.0
+                + canvas_width / 2.0
+
             )
 
             canvas_y2 = (
+
                 canvas_y
-                + canvas_h / 2.0
+                + canvas_height / 2.0
+
             )
 
-            # ----------------------------------------------------
-            # REMOVE LETTERBOX PADDING
-            # ----------------------------------------------------
-
             x1 = (
+
                 canvas_x1
                 - pad_x
+
             ) / scale
 
             y1 = (
+
                 canvas_y1
                 - pad_y
+
             ) / scale
 
             x2 = (
+
                 canvas_x2
                 - pad_x
+
             ) / scale
 
             y2 = (
+
                 canvas_y2
                 - pad_y
-            ) / scale
 
-            # ----------------------------------------------------
-            # CLIP TO ORIGINAL TILE
-            # ----------------------------------------------------
+            ) / scale
 
             x1 = float(
                 np.clip(
@@ -976,37 +1000,229 @@ class TextDecoder:
             )
 
             if (
+
                 x2 <= x1
                 or y2 <= y1
+
             ):
+
                 continue
 
-            detections.append(
-                {
-                    "class_id": class_id,
-                    "letter": self.labels[
-                        class_id
-                    ],
-                    "score": score,
-                    "box": (
-                        x1,
-                        y1,
-                        x2,
-                        y2,
-                    ),
-                }
-            )
+            detections.append({
 
-        # --------------------------------------------------------
-        # LOCAL NMS
-        # --------------------------------------------------------
+                "class_id": class_id,
 
+                "letter": self.labels[
+                    class_id
+                ],
+
+                "score": score,
+
+                "box": [
+
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+
+                ],
+
+            })
+
+        # Local NMS first.
         detections = self.nms(
             detections
         )
 
-        return self.compose_result(
+        lines = self._group_lines(
             detections
+        )
+
+        return {
+
+            "detections": detections,
+
+            "lines": lines,
+
+            "text": self._lines_to_text(
+                lines
+            ),
+
+        }
+
+    # ============================================================
+    # GLOBAL MERGE
+    # ============================================================
+
+    def merge_detections(
+        self,
+        detections,
+    ):
+        """
+        Merge detections from all tiles
+        using global NMS.
+        """
+
+        if not detections:
+
+            return []
+
+        normalized = []
+
+        for detection in detections:
+
+            if not isinstance(
+                detection,
+                dict,
+            ):
+
+                continue
+
+            if (
+                "box"
+                not in detection
+            ):
+
+                continue
+
+            if (
+                "class_id"
+                not in detection
+            ):
+
+                continue
+
+            if (
+                "score"
+                not in detection
+            ):
+
+                continue
+
+            box = detection[
+                "box"
+            ]
+
+            if (
+                not isinstance(
+                    box,
+                    (
+                        list,
+                        tuple,
+                    ),
+                )
+                or len(box) != 4
+            ):
+
+                continue
+
+            try:
+
+                x1 = float(
+                    box[0]
+                )
+
+                y1 = float(
+                    box[1]
+                )
+
+                x2 = float(
+                    box[2]
+                )
+
+                y2 = float(
+                    box[3]
+                )
+
+                score = float(
+                    detection[
+                        "score"
+                    ]
+                )
+
+                class_id = int(
+                    detection[
+                        "class_id"
+                    ]
+                )
+
+            except (
+                TypeError,
+                ValueError,
+            ):
+
+                continue
+
+            if not np.isfinite(
+
+                [
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    score,
+                ]
+
+            ).all():
+
+                continue
+
+            if (
+
+                x2 <= x1
+                or y2 <= y1
+
+            ):
+
+                continue
+
+            if not (
+
+                0
+                <= class_id
+                < len(
+                    self.labels
+                )
+
+            ):
+
+                continue
+
+            item = dict(
+                detection
+            )
+
+            item["class_id"] = (
+                class_id
+            )
+
+            item["score"] = (
+                score
+            )
+
+            item["letter"] = (
+
+                self.labels[
+                    class_id
+                ]
+
+            )
+
+            item["box"] = [
+
+                x1,
+                y1,
+                x2,
+                y2,
+
+            ]
+
+            normalized.append(
+                item
+            )
+
+        return self.nms(
+            normalized
         )
 
     # ============================================================
@@ -1019,40 +1235,82 @@ class TextDecoder:
     ):
 
         if not detections:
+
             return []
 
         vertical = sorted(
+
             detections,
-            key=lambda detection: (
-                float(
-                    detection["box"][1]
+
+            key=lambda item: (
+
+                (
+                    float(
+                        item[
+                            "box"
+                        ][1]
+                    )
+
+                    +
+
+                    float(
+                        item[
+                            "box"
+                        ][3]
+                    )
+
                 )
-                + float(
-                    detection["box"][3]
-                )
-            )
-            / 2.0,
+
+                / 2.0
+
+            ),
+
         )
 
         lines = []
 
         for detection in vertical:
 
-            box = detection["box"]
+            x1, y1, x2, y2 = (
 
-            x1 = float(box[0])
-            y1 = float(box[1])
-            x2 = float(box[2])
-            y2 = float(box[3])
+                float(
+                    detection[
+                        "box"
+                    ][0]
+                ),
+
+                float(
+                    detection[
+                        "box"
+                    ][1]
+                ),
+
+                float(
+                    detection[
+                        "box"
+                    ][2]
+                ),
+
+                float(
+                    detection[
+                        "box"
+                    ][3]
+                ),
+
+            )
 
             center_y = (
-                y1
-                + y2
+
+                y1 + y2
+
             ) / 2.0
 
             height = max(
+
                 1.0,
+
                 y2 - y1,
+
             )
 
             best_line = None
@@ -1063,50 +1321,86 @@ class TextDecoder:
 
             for line in lines:
 
-                line_center_y = (
-                    line["center_y"]
-                )
-
-                average_height = (
-                    line["avg_height"]
-                )
-
                 tolerance = max(
 
                     height * 0.50,
 
-                    average_height * 0.60,
+                    line[
+                        "avg_height"
+                    ] * 0.60,
 
                     8.0,
 
                 )
 
                 distance = abs(
+
                     center_y
-                    - line_center_y
+                    - line[
+                        "center_y"
+                    ]
+
                 )
 
                 if (
+
                     distance <= tolerance
-                    and distance < best_distance
+
+                    and
+
+                    distance
+                    < best_distance
+
                 ):
 
-                    best_distance = distance
+                    best_distance = (
+                        distance
+                    )
 
-                    best_line = line
+                    best_line = (
+                        line
+                    )
 
-            # ----------------------------------------------------
-            # EXISTING LINE
-            # ----------------------------------------------------
+            if best_line is None:
 
-            if best_line is not None:
+                lines.append({
 
-                best_line["items"].append(
+                    "center_y": float(
+                        center_y
+                    ),
+
+                    "avg_height": float(
+                        height
+                    ),
+
+                    "total_y_sum": float(
+                        center_y
+                    ),
+
+                    "total_h_sum": float(
+                        height
+                    ),
+
+                    "items": [
+                        detection
+                    ],
+
+                })
+
+            else:
+
+                best_line[
+                    "items"
+                ].append(
                     detection
                 )
 
                 count = len(
-                    best_line["items"]
+
+                    best_line[
+                        "items"
+                    ]
+
                 )
 
                 best_line[
@@ -1120,182 +1414,236 @@ class TextDecoder:
                 best_line[
                     "center_y"
                 ] = (
+
                     best_line[
                         "total_y_sum"
                     ]
+
                     / count
+
                 )
 
                 best_line[
                     "avg_height"
                 ] = (
+
                     best_line[
                         "total_h_sum"
                     ]
+
                     / count
+
                 )
-
-            # ----------------------------------------------------
-            # NEW LINE
-            # ----------------------------------------------------
-
-            else:
-
-                lines.append(
-                    {
-                        "center_y": float(
-                            center_y
-                        ),
-
-                        "avg_height": float(
-                            height
-                        ),
-
-                        "total_y_sum": float(
-                            center_y
-                        ),
-
-                        "total_h_sum": float(
-                            height
-                        ),
-
-                        "items": [
-                            detection
-                        ],
-                    }
-                )
-
-        # --------------------------------------------------------
-        # SORT LINES
-        # --------------------------------------------------------
 
         lines.sort(
-            key=lambda line: float(
-                line["center_y"]
-            )
-        )
 
-        # --------------------------------------------------------
-        # SORT LETTERS INSIDE EACH LINE
-        # --------------------------------------------------------
+            key=lambda line:
+            line[
+                "center_y"
+            ]
+
+        )
 
         for line in lines:
 
-            line["items"].sort(
-                key=lambda detection: float(
-                    detection["box"][0]
+            line[
+                "items"
+            ].sort(
+
+                key=lambda item:
+                float(
+                    item[
+                        "box"
+                    ][0]
                 )
+
             )
 
-        return lines
+        # Remove internal calculation fields.
+        clean_lines = []
+
+        for line in lines:
+
+            clean_lines.append({
+
+                "center_y": float(
+                    line[
+                        "center_y"
+                    ]
+                ),
+
+                "items": list(
+                    line[
+                        "items"
+                    ]
+                ),
+
+            })
+
+        return clean_lines
 
     # ============================================================
-    # BUILD LINE TEXT
+    # LINES TO TEXT
     # ============================================================
 
-    def _build_line_text(
+    def _lines_to_text(
         self,
-        items,
+        lines,
     ):
 
-        if not items:
-            return ""
+        text_lines = []
 
-        ordered = sorted(
-            items,
-            key=lambda detection: float(
-                detection["box"][0]
-            ),
-        )
+        for line in lines:
 
-        characters = []
+            items = list(
 
-        for index, detection in enumerate(
-            ordered
-        ):
-
-            characters.append(
-                str(
-                    detection["letter"]
+                line.get(
+                    "items",
+                    [],
                 )
+
             )
 
-            # ----------------------------------------------------
-            # LAST LETTER
-            # ----------------------------------------------------
+            if not items:
 
-            if (
-                index
-                >= len(ordered) - 1
-            ):
                 continue
 
-            next_detection = ordered[
-                index + 1
-            ]
+            items.sort(
 
-            current_box = (
-                detection["box"]
-            )
-
-            next_box = (
-                next_detection["box"]
-            )
-
-            current_x2 = float(
-                current_box[2]
-            )
-
-            next_x1 = float(
-                next_box[0]
-            )
-
-            gap = (
-                next_x1
-                - current_x2
-            )
-
-            current_width = max(
-                1.0,
+                key=lambda item:
                 float(
-                    current_box[2]
+                    item[
+                        "box"
+                    ][0]
                 )
-                - float(
-                    current_box[0]
-                ),
+
             )
 
-            next_width = max(
-                1.0,
-                float(
-                    next_box[2]
-                )
-                - float(
-                    next_box[0]
-                ),
-            )
+            characters = []
 
-            average_width = (
-
-                current_width
-                + next_width
-
-            ) / 2.0
-
-            if (
-                gap
-                > (
-                    average_width
-                    * self.space_threshold_factor
-                )
+            for index, item in enumerate(
+                items
             ):
 
                 characters.append(
-                    " "
+
+                    str(
+                        item.get(
+                            "letter",
+                            "",
+                        )
+                    )
+
                 )
 
-        return "".join(
-            characters
+                if index >= (
+                    len(items) - 1
+                ):
+
+                    continue
+
+                next_item = items[
+                    index + 1
+                ]
+
+                current_x2 = float(
+
+                    item[
+                        "box"
+                    ][2]
+
+                )
+
+                next_x1 = float(
+
+                    next_item[
+                        "box"
+                    ][0]
+
+                )
+
+                gap = (
+
+                    next_x1
+                    - current_x2
+
+                )
+
+                current_width = max(
+
+                    1.0,
+
+                    float(
+                        item[
+                            "box"
+                        ][2]
+                    )
+
+                    -
+
+                    float(
+                        item[
+                            "box"
+                        ][0]
+                    ),
+
+                )
+
+                next_width = max(
+
+                    1.0,
+
+                    float(
+                        next_item[
+                            "box"
+                        ][2]
+                    )
+
+                    -
+
+                    float(
+                        next_item[
+                            "box"
+                        ][0]
+                    ),
+
+                )
+
+                average_width = (
+
+                    current_width
+                    + next_width
+
+                ) / 2.0
+
+                if (
+
+                    gap
+                    >
+
+                    (
+                        average_width
+                        * self.space_threshold_factor
+                    )
+
+                ):
+
+                    characters.append(
+                        " "
+                    )
+
+            line_text = "".join(
+                characters
+            )
+
+            if line_text.strip():
+
+                text_lines.append(
+                    line_text
+                )
+
+        return "\n".join(
+            text_lines
         )
 
     # ============================================================
@@ -1307,89 +1655,51 @@ class TextDecoder:
         detections,
     ):
         """
-        Create final OCR result.
-
-        Returns:
-            {
-                "text": str,
-                "detections": list,
-                "lines": list
-            }
+        Build the final OCR result
+        after global tile merging.
         """
 
-        if not detections:
-
-            return {
-                "text": "",
-                "detections": [],
-                "lines": [],
-            }
-
-        ordered_detections = self.sort_detections(
+        detections = list(
             detections
+            or []
         )
 
         lines = self._group_lines(
-            ordered_detections
+            detections
         )
 
-        text_lines = []
-
-        for line in lines:
-
-            line_text = self._build_line_text(
-                line["items"]
-            )
-
-            if line_text.strip():
-
-                text_lines.append(
-                    line_text
-                )
-
-        text = "\n".join(
-            text_lines
+        text = self._lines_to_text(
+            lines
         )
 
         return {
+
             "text": text,
-            "detections": (
-                ordered_detections
-            ),
+
+            "detections": detections,
+
             "lines": lines,
+
         }
 
     # ============================================================
-    # DECODE TEXT ONLY
+    # COMPATIBILITY METHOD
     # ============================================================
 
     def decode_text(
         self,
         output,
-        original_width=None,
-        original_height=None,
-        scale=None,
-        pad_x=None,
-        pad_y=None,
-        meta=None,
+        meta,
     ):
 
         result = self.decode(
 
             output=output,
 
-            original_width=original_width,
-
-            original_height=original_height,
-
-            scale=scale,
-
-            pad_x=pad_x,
-
-            pad_y=pad_y,
-
             meta=meta,
 
         )
 
-        return result["text"]
+        return result[
+            "text"
+        ]
