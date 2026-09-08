@@ -11,11 +11,15 @@ sdkmanager \
 
 echo "=== Accepting Android licenses ==="
 
-set +o pipefail
-yes | sdkmanager --licenses >/dev/null 2>&1 || true
-set -o pipefail
+(
+  set +o pipefail
+  yes | sdkmanager --licenses >/dev/null 2>&1
+  exit 0
+)
 
 echo "=== Android SDK setup completed ==="
 
-sdkmanager --list_installed | grep -E \
+echo "=== Checking installed packages ==="
+
+sdkmanager --list_installed 2>/dev/null | grep -E \
 "platform-tools|platforms;android-35|build-tools;35.0.0" || true
