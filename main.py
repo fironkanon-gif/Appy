@@ -434,16 +434,6 @@ class GothicOCRApp(App):
             intent.setType("image/*")
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
 
-            # If a device has no document picker, fall back to the classic
-            # content picker. Both return a content:// URI that we copy into
-            # app-private storage before OCR.
-            package_manager = current_activity.getPackageManager()
-            if intent.resolveActivity(package_manager) is None:
-                intent = Intent(Intent.ACTION_GET_CONTENT)
-                intent.addCategory(Intent.CATEGORY_OPENABLE)
-                intent.setType("image/*")
-                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-
             @run_on_ui_thread
             def launch():
                 current_activity.startActivityForResult(intent, GALLERY_REQUEST)
@@ -547,9 +537,6 @@ class GothicOCRApp(App):
             self._camera_bound = True
 
             intent = Intent("android.media.action.IMAGE_CAPTURE")
-            if intent.resolveActivity(current_activity.getPackageManager()) is None:
-                raise RuntimeError("No camera application is available on this device")
-
             self._set_status("Opening camera...")
 
             @run_on_ui_thread
@@ -571,32 +558,25 @@ class GothicOCRApp(App):
                 self._set_status("Camera cancelled")
                 return
 
-            # Camera applications are allowed to return either:
-            #   1) a Bitmap in Intent extras (common/default path), or
-            #   2) a content URI in Intent.getData().
-            # Handle both so the button does not depend on one camera app.
             extras = intent.getExtras()
-            bitmap = extras.get("data") if extras is not None else None
+            if extras is None:
+                raise IOError("Camera returned no image data")
+            bitmap = extras.get("data")
+            if bitmap is None:
+                raise IOError("Camera returned no image bitmap")
 
-            if bitmap is not None:
-                path = str(Path(self.user_data_dir) / "camera_input.jpg")
-                FileOutputStream = autoclass("java.io.FileOutputStream")
-                CompressFormat = autoclass("android.graphics.Bitmap$CompressFormat")
-                stream = FileOutputStream(path)
-                try:
-                    if not bitmap.compress(CompressFormat.JPEG, 95, stream):
-                        raise IOError("Camera bitmap compression failed")
-                finally:
-                    stream.close()
-            else:
-                uri = intent.getData()
-                if uri is None:
-                    raise IOError("Camera returned neither image bitmap nor image URI")
-                path = self._copy_uri_to_private_file(uri, "camera_input.jpg")
+            path = str(Path(self.user_data_dir) / "camera_input.jpg")
+            FileOutputStream = autoclass("java.io.FileOutputStream")
+            CompressFormat = autoclass("android.graphics.Bitmap$CompressFormat")
+            stream = FileOutputStream(path)
+            try:
+                if not bitmap.compress(CompressFormat.JPEG, 95, stream):
+                    raise IOError("Camera bitmap compression failed")
+            finally:
+                stream.close()
 
             self._normalize_image(path)
-            if not self._set_selected_image(path):
-                raise IOError("Captured image could not be loaded")
+            self._set_selected_image(path)
             self._set_status("✦ Image captured successfully ✦")
         except Exception as exc:
             print("CAMERA RESULT ERROR:", repr(exc))
@@ -607,40 +587,67 @@ class GothicOCRApp(App):
     # --------------------------------------------------------
     def _normalize_image(self, path):
         from PIL import Image as PILImage
-        image = PILImage.open(path)
-        image.load()
-        rgb = image.convert("RGB")
-        rgb.save(path, "JPEG", quality=95)
-        rgb.close()
-        image.close()
+        source = Path(path)
+        temp = source.with_name(source.stem + "_normalized.jpg")
+        try:
+            with PILImage.open(source) as image:
+                image.load()
+                rgb = image.convert("RGB")
+                rgb.save(temp, format="JPEG", quality=95, optimize=True)
+                rgb.close()
+            os.replace(temp, source)
+        except Exception:
+            try:
+                if temp.exists():
+                    temp.unlink()
+            except Exception:
+                pass
+            raise
 
     def _set_selected_image(self, image_path):
+        from kivy.core.image import Image as CoreImage
+        from PIL import Image as PILImage
+
         path = Path(str(image_path))
         if not path.is_file():
             self._set_status("Invalid image")
             return False
+
         try:
             self._normalize_image(str(path))
+            with PILImage.open(path) as check_image:
+                check_image.load()
+                width, height = check_image.size
+                if width <= 0 or height <= 0:
+                    raise ValueError("Image has invalid dimensions")
         except Exception as exc:
             print("IMAGE VALIDATION ERROR:", repr(exc))
             self._set_status(f"Invalid image: {type(exc).__name__}")
             return False
 
-        self.selected_image = str(path)
-        self.preview.source = ""
-        self.preview.reload()
-        self.preview.source = self.selected_image
-        self.preview.reload()
-        self.result.text = "Image is ready for analysis"
-        self._reset_stats()
-        self._show_main_layout()
-        self._set_status("✦ Image selected successfully ✦")
-        return True
+        try:
+            texture = CoreImage(str(path), nocache=True).texture
+            if texture is None:
+                raise RuntimeError("Kivy could not create an image texture")
+            self.preview.texture = texture
+            self.preview.source = ""
+            self.selected_image = str(path)
+            self.result.text = "Image is ready for analysis"
+            self._reset_stats()
+            self._show_main_layout()
+            self._set_status(f"✦ Image loaded • {width}×{height} ✦")
+            return True
+        except Exception as exc:
+            print("IMAGE PREVIEW ERROR:", repr(exc))
+            self.preview.texture = None
+            self._set_status(f"Preview error: {type(exc).__name__}")
+            return False
 
     # --------------------------------------------------------
     # ANALYZE
     # --------------------------------------------------------
     def analyze(self, *_):
+        print("=== GOTHIC OCR ANALYZE PRESSED ===")
         if not self.selected_image:
             self._set_status("⚠ Please select an image first")
             return
@@ -652,14 +659,27 @@ class GothicOCRApp(App):
             self._set_status("Selected image no longer exists")
             return
 
+        try:
+            from PIL import Image as PILImage
+            with PILImage.open(image_path) as image:
+                image.verify()
+        except Exception as exc:
+            self._set_status(f"Invalid image: {type(exc).__name__}")
+            self._update_ui_error(f"Image validation failed: {type(exc).__name__}: {exc}")
+            return
+
+        if not MODEL_PATH.is_file():
+            self._update_ui_error(f"Model file not found: {MODEL_PATH}")
+            return
+
         self.analyze_button.disabled = True
         self.gallery_button.disabled = True
         self.camera_button.disabled = True
         self.copy_button.disabled = True
         self.save_button.disabled = True
         self.another_button.disabled = True
-        self._set_status("✦ Analyzing image... ✦")
-        self.result.text = "Extracting Gothic characters..."
+        self._set_status("✦ Loading Gothic OCR model... ✦")
+        self.result.text = "Loading AI model..."
 
         threading.Thread(
             target=self._run_inference_thread,
@@ -669,6 +689,11 @@ class GothicOCRApp(App):
 
     def _run_inference_thread(self, image_path):
         try:
+            if not Path(image_path).is_file():
+                raise FileNotFoundError(f"Image not found: {image_path}")
+            if not MODEL_PATH.is_file():
+                raise FileNotFoundError(f"Model not found: {MODEL_PATH}")
+
             if self.ocr is None:
                 from services.model_service import GothicOCR
                 self.ocr = GothicOCR(MODEL_PATH)
@@ -699,6 +724,8 @@ class GothicOCRApp(App):
 
             self._update_ui_success(text, stats, cache_hit, width, height, tiles)
         except Exception as exc:
+            import traceback
+            traceback.print_exc()
             print("OCR ERROR:", repr(exc))
             self._update_ui_error(f"{type(exc).__name__}: {exc}")
 
@@ -842,17 +869,11 @@ class GothicOCRApp(App):
             stream = resolver.openOutputStream(uri)
             if stream is None:
                 raise IOError("Could not open save destination")
-            writer = None
             try:
-                OutputStreamWriter = autoclass("java.io.OutputStreamWriter")
-                writer = OutputStreamWriter(stream, "UTF-8")
-                writer.write(str(self.result.text))
-                writer.flush()
+                data = str(self.result.text).encode("utf-8")
+                stream.write(data)
             finally:
-                if writer is not None:
-                    writer.close()
-                else:
-                    stream.close()
+                stream.close()
             self._set_status("✓ TXT saved successfully")
         except Exception as exc:
             print("SAVE RESULT ERROR:", repr(exc))
