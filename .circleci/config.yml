@@ -236,12 +236,102 @@ jobs:
             then
               sdkmanager --version
             else
-              echo "WARNING: sdkmanager is not in PATH"
+              echo "ERROR: sdkmanager is not in PATH"
+              exit 1
             fi
 
 
       # ============================================================
-      # 10. VALIDATE MODEL SIZE
+      # 10. ACCEPT ANDROID SDK LICENSES
+      # ============================================================
+      - run:
+          name: Accept Android SDK licenses
+          command: |
+            set -eux
+
+            echo "===== ACCEPT ANDROID LICENSES ====="
+
+            yes | sdkmanager --licenses || true
+
+            echo "Android SDK licenses processed."
+
+
+      # ============================================================
+      # 11. INSTALL REQUIRED ANDROID SDK PACKAGES
+      # ============================================================
+      - run:
+          name: Install Android SDK packages
+          command: |
+            set -eux
+
+            echo "===== INSTALL PLATFORM TOOLS ====="
+
+            sdkmanager \
+              "platform-tools"
+
+            echo "===== INSTALL ANDROID PLATFORM ====="
+
+            sdkmanager \
+              "platforms;android-35"
+
+            echo "===== INSTALL BUILD TOOLS ====="
+
+            sdkmanager \
+              "build-tools;37.0.0"
+
+            echo "===== INSTALLED BUILD TOOLS ====="
+
+            SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+
+            if [ -z "$SDK_ROOT" ]
+            then
+              echo "ERROR: Android SDK path is not defined."
+              exit 1
+            fi
+
+            ls -la "$SDK_ROOT/build-tools"
+
+            echo "Android SDK packages installed."
+
+
+      # ============================================================
+      # 12. VERIFY AIDL
+      # ============================================================
+      - run:
+          name: Verify AIDL
+          command: |
+            set -eux
+
+            SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+
+            echo "===== SEARCH FOR AIDL ====="
+
+            find "$SDK_ROOT/build-tools" \
+              -type f \
+              -name aidl \
+              -print
+
+            AIDL_PATH=$(find "$SDK_ROOT/build-tools" \
+              -type f \
+              -name aidl \
+              | head -1)
+
+            if [ -z "$AIDL_PATH" ]
+            then
+              echo "ERROR: AIDL was not found."
+              exit 1
+            fi
+
+            echo "AIDL found:"
+            echo "$AIDL_PATH"
+
+            "$AIDL_PATH" --help >/dev/null 2>&1 || true
+
+            echo "AIDL verification successful."
+
+
+      # ============================================================
+      # 13. VALIDATE MODEL SIZE
       # ============================================================
       - run:
           name: Validate model file
@@ -264,7 +354,7 @@ jobs:
 
 
       # ============================================================
-      # 11. FINAL PRE-BUILD CHECK
+      # 14. FINAL PRE-BUILD CHECK
       # ============================================================
       - run:
           name: Final pre-build verification
@@ -285,10 +375,20 @@ jobs:
             echo "===== GIT ====="
             git --version
 
+            echo "===== ANDROID SDK ====="
+            echo "ANDROID_HOME=${ANDROID_HOME:-}"
+            echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
+
+            echo "===== BUILD TOOLS ====="
+
+            SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+            ls -la "$SDK_ROOT/build-tools"
+
             echo "===== DISK ====="
             df -h
 
             echo "===== PROJECT TREE ====="
+
             find . \
               -maxdepth 3 \
               -type f \
@@ -299,50 +399,22 @@ jobs:
 
 
       # ============================================================
-      # 12. CLEAN OLD BUILD
-      # ============================================================
-    # ============================================================
-      # 12. CLEAN OLD BUILD AND CACHES
+      # 15. CLEAN OLD BUILD
       # ============================================================
       - run:
-          name: Clean old Android build and caches
+          name: Clean old Android build
           command: |
             set -eux
 
-            echo "===== REMOVE OLD APK ====="
+            source ~/buildozer-venv/bin/activate
+
             rm -rf bin
 
-            echo "===== REMOVE PROJECT BUILDOZER CACHE ====="
-            rm -rf .buildozer
+            echo "Old APK output removed."
 
-            echo "===== REMOVE USER BUILDOZER CACHE ====="
-            rm -rf ~/.buildozer
-
-            echo "===== REMOVE GRADLE CACHE ====="
-            rm -rf ~/.gradle/caches
-            rm -rf ~/.gradle/daemon
-
-            echo "===== REMOVE PYTHON CACHE ====="
-            find . \
-              -type d \
-              -name "__pycache__" \
-              -prune \
-              -exec rm -rf {} +
-
-            find . \
-              -type f \
-              -name "*.pyc" \
-              -delete
-
-            echo "===== VERIFY CLEANUP ====="
-
-            test ! -d .buildozer
-            test ! -d bin
-
-            echo "===== CACHE CLEANUP COMPLETED ====="
 
       # ============================================================
-      # 13. BUILD APK
+      # 16. BUILD APK
       # ============================================================
       - run:
           name: Build Android APK
@@ -368,7 +440,7 @@ jobs:
 
 
       # ============================================================
-      # 14. VERIFY APK
+      # 17. VERIFY APK
       # ============================================================
       - run:
           name: Verify generated APK
@@ -407,7 +479,7 @@ jobs:
 
 
       # ============================================================
-      # 15. SAVE APK
+      # 18. SAVE APK
       # ============================================================
       - store_artifacts:
           path: bin
