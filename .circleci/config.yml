@@ -466,7 +466,64 @@ jobs:
 
             echo "Old output removed."
 
+      # ============================================================
+      # 16.5. PREPARE FREETYPE FALLBACK SOURCE
+      # ============================================================
+      - run:
+          name: Prepare FreeType fallback
+          command: |
+            set -eux
 
+            source "$BASH_ENV"
+
+            P4A_DIR="$HOME/.buildozer/android/platform/python-for-android"
+            FREETYPE_RECIPE="$P4A_DIR/pythonforandroid/recipes/freetype/recipe.py"
+
+            echo "===== LOCATING PYTHON-FOR-ANDROID ====="
+
+            if [ ! -f "$FREETYPE_RECIPE" ]
+            then
+              echo "python-for-android is not initialized yet."
+              echo "Buildozer will initialize it during the build."
+              exit 0
+            fi
+
+            echo "===== FREETYPE RECIPE ====="
+
+            grep -E \
+              "version|url" \
+              "$FREETYPE_RECIPE" || true
+
+            FREETYPE_VERSION=$(grep -E \
+              "^[[:space:]]*version[[:space:]]*=" \
+              "$FREETYPE_RECIPE" | head -1 | sed -E "s/.*['\"]([^'\"]+)['\"].*/\1/")
+
+            if [ -z "$FREETYPE_VERSION" ]
+            then
+              echo "ERROR: Could not determine FreeType version."
+              exit 1
+            fi
+
+            echo "FreeType version: $FREETYPE_VERSION"
+
+            CACHE_DIR="$HOME/.buildozer/android/platform/build-arm64-v8a/packages/freetype"
+
+            mkdir -p "$CACHE_DIR"
+
+            ARCHIVE="freetype-${FREETYPE_VERSION}.tar.gz"
+
+            echo "===== DOWNLOADING FREETYPE FROM OFFICIAL FREEDESKTOP SOURCE ====="
+
+            wget \
+              --tries=5 \
+              --timeout=30 \
+              -O "$CACHE_DIR/$ARCHIVE" \
+              "https://gitlab.freedesktop.org/freetype/freetype/-/archive/VER-${FREETYPE_VERSION}/freetype-VER-${FREETYPE_VERSION}.tar.gz"
+
+            test -s "$CACHE_DIR/$ARCHIVE"
+
+            echo "FreeType fallback archive prepared:"
+            ls -lh "$CACHE_DIR/$ARCHIVE"
       # ============================================================
       # 17. BUILD APK
       # ============================================================
