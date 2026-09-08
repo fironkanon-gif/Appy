@@ -7,7 +7,7 @@ from pathlib import Path
 import threading
 
 from kivy.app import App
-from kivy.clock import Clock, mainthread
+from kivy.clock import mainthread
 from kivy.core.text import LabelBase
 from kivy.graphics import (
     Color,
@@ -37,8 +37,11 @@ try:
         check_permission,
         request_permissions,
     )
+
     ANDROID_AVAILABLE = True
+
 except Exception:
+
     ANDROID_AVAILABLE = False
 
 
@@ -52,10 +55,6 @@ FONT_DIR = ROOT / "fonts"
 
 GOTHIC_FONT_PATH = (
     FONT_DIR / "NotoSansGothic-Regular.ttf"
-)
-
-ARABIC_FONT_PATH = (
-    FONT_DIR / "Amiri-Regular.ttf"
 )
 
 MODEL_PATH = (
@@ -111,13 +110,6 @@ GOLD = (
     1,
 )
 
-GOLD_DARK = (
-    0.55,
-    0.34,
-    0.08,
-    1,
-)
-
 TEXT = (
     0.96,
     0.93,
@@ -129,20 +121,6 @@ TEXT_DIM = (
     0.72,
     0.65,
     0.82,
-    1,
-)
-
-SUCCESS = (
-    0.35,
-    0.90,
-    0.60,
-    1,
-)
-
-ERROR = (
-    1.0,
-    0.35,
-    0.40,
     1,
 )
 
@@ -202,9 +180,7 @@ class PremiumCard(BoxLayout):
             self.background = RoundedRectangle(
                 pos=self.pos,
                 size=self.size,
-                radius=[
-                    dp(self.radius),
-                ],
+                radius=[dp(self.radius)],
             )
 
         self.bind(
@@ -220,9 +196,7 @@ class PremiumCard(BoxLayout):
 
     def _update_color(self, *_):
 
-        self.background.rgba = (
-            self.background_color
-        )
+        self.background.rgba = self.background_color
 
 
 # ============================================================
@@ -233,10 +207,7 @@ class PremiumButton(Button):
 
     button_color = ListProperty(PURPLE)
 
-    def __init__(
-        self,
-        **kwargs,
-    ):
+    def __init__(self, **kwargs):
 
         super().__init__(**kwargs)
 
@@ -256,9 +227,7 @@ class PremiumButton(Button):
             self.background = RoundedRectangle(
                 pos=self.pos,
                 size=self.size,
-                radius=[
-                    dp(18),
-                ],
+                radius=[dp(18)],
             )
 
         self.bind(
@@ -274,9 +243,7 @@ class PremiumButton(Button):
 
     def _update_color(self, *_):
 
-        self.background.rgba = (
-            self.button_color
-        )
+        self.background.rgba = self.button_color
 
 
 # ============================================================
@@ -306,7 +273,7 @@ class StatCard(PremiumCard):
             color=TEXT_DIM,
             halign="center",
             valign="middle",
-            font_name="Arabic",
+            font_name="Roboto",
         )
 
         self.value_label = Label(
@@ -315,16 +282,11 @@ class StatCard(PremiumCard):
             color=GOLD,
             halign="center",
             valign="middle",
-            font_name="Arabic",
+            font_name="Roboto",
         )
 
-        self.add_widget(
-            self.title_label
-        )
-
-        self.add_widget(
-            self.value_label
-        )
+        self.add_widget(self.title_label)
+        self.add_widget(self.value_label)
 
         self.bind(
             size=self._update_labels
@@ -373,10 +335,6 @@ class GothicOCRApp(App):
             GOTHIC_FONT_PATH.is_file()
         )
 
-        self.arabic_font_available = (
-            ARABIC_FONT_PATH.is_file()
-        )
-
         if self.gothic_font_available:
 
             LabelBase.register(
@@ -386,20 +344,7 @@ class GothicOCRApp(App):
                 ),
             )
 
-        if self.arabic_font_available:
-
-            LabelBase.register(
-                name="Arabic",
-                fn_regular=str(
-                    ARABIC_FONT_PATH
-                ),
-            )
-
-        self.ui_font = (
-            "Arabic"
-            if self.arabic_font_available
-            else "Roboto"
-        )
+        self.ui_font = "Roboto"
 
         # ====================================================
         # ROOT
@@ -460,7 +405,10 @@ class GothicOCRApp(App):
         )
 
         self.subtitle = Label(
-            text="اكتشاف وتحليل النصوص القوطية بالذكاء الاصطناعي",
+            text=(
+                "Detect and analyze Gothic text "
+                "using Artificial Intelligence"
+            ),
             font_size="16sp",
             color=TEXT_DIM,
             font_name=self.ui_font,
@@ -479,7 +427,7 @@ class GothicOCRApp(App):
         # ====================================================
 
         self.status = Label(
-            text="جاهز لاختيار صورة",
+            text="Ready to select an image",
             font_size="17sp",
             color=TEXT,
             font_name=self.ui_font,
@@ -527,7 +475,7 @@ class GothicOCRApp(App):
         # ====================================================
 
         self.result_title = Label(
-            text="✦ النص المستخرج ✦",
+            text="✦ EXTRACTED TEXT ✦",
             font_size="16sp",
             color=GOLD,
             font_name=self.ui_font,
@@ -542,7 +490,7 @@ class GothicOCRApp(App):
         # ====================================================
 
         self.result = Label(
-            text="لم يتم تحليل أي صورة بعد",
+            text="No image has been analyzed yet",
             font_name=(
                 "Gothic"
                 if self.gothic_font_available
@@ -588,17 +536,17 @@ class GothicOCRApp(App):
         )
 
         self.char_stat = StatCard(
-            "الحروف",
+            "Characters",
             "0",
         )
 
         self.conf_stat = StatCard(
-            "متوسط الثقة",
+            "Confidence",
             "0%",
         )
 
         self.line_stat = StatCard(
-            "الأسطر",
+            "Lines",
             "0",
         )
 
@@ -628,7 +576,7 @@ class GothicOCRApp(App):
         # ====================================================
 
         self.gallery_button = PremiumButton(
-            text="🖼  اختيار صورة من المعرض",
+            text="🖼  Choose Image from Gallery",
             font_name=self.ui_font,
             button_color=PURPLE,
         )
@@ -642,7 +590,7 @@ class GothicOCRApp(App):
         # ====================================================
 
         self.camera_button = PremiumButton(
-            text="📷  التقاط صورة بالكاميرا",
+            text="📷  Capture Image with Camera",
             font_name=self.ui_font,
             button_color=PURPLE_DARK,
         )
@@ -656,7 +604,7 @@ class GothicOCRApp(App):
         # ====================================================
 
         self.analyze_button = PremiumButton(
-            text="✦  تحليل الصورة الآن  ✦",
+            text="✦  ANALYZE IMAGE NOW  ✦",
             font_name=self.ui_font,
             button_color=GOLD,
         )
@@ -723,45 +671,16 @@ class GothicOCRApp(App):
 
         self.root_box.clear_widgets()
 
-        self.root_box.add_widget(
-            self.title_label
-        )
-
-        self.root_box.add_widget(
-            self.subtitle
-        )
-
-        self.root_box.add_widget(
-            self.status_card
-        )
-
-        self.root_box.add_widget(
-            self.preview_card
-        )
-
-        self.root_box.add_widget(
-            self.result_card
-        )
-
-        self.root_box.add_widget(
-            self.stats_layout
-        )
-
-        self.root_box.add_widget(
-            self.gallery_button
-        )
-
-        self.root_box.add_widget(
-            self.camera_button
-        )
-
-        self.root_box.add_widget(
-            self.analyze_button
-        )
-
-        self.root_box.add_widget(
-            self.footer
-        )
+        self.root_box.add_widget(self.title_label)
+        self.root_box.add_widget(self.subtitle)
+        self.root_box.add_widget(self.status_card)
+        self.root_box.add_widget(self.preview_card)
+        self.root_box.add_widget(self.result_card)
+        self.root_box.add_widget(self.stats_layout)
+        self.root_box.add_widget(self.gallery_button)
+        self.root_box.add_widget(self.camera_button)
+        self.root_box.add_widget(self.analyze_button)
+        self.root_box.add_widget(self.footer)
 
     # ========================================================
     # GALLERY
@@ -786,9 +705,7 @@ class GothicOCRApp(App):
                 "*.WEBP",
             ],
             multiselect=False,
-            path=str(
-                Path.home()
-            ),
+            path=str(Path.home()),
         )
 
         chooser.bind(
@@ -796,7 +713,7 @@ class GothicOCRApp(App):
         )
 
         back_button = PremiumButton(
-            text="←  رجوع إلى Gothic OCR",
+            text="←  Back to Gothic OCR",
             font_name=self.ui_font,
             button_color=PURPLE_DARK,
         )
@@ -812,30 +729,17 @@ class GothicOCRApp(App):
             spacing=dp(10),
         )
 
-        chooser_card.add_widget(
-            chooser
-        )
-
-        chooser_card.add_widget(
-            back_button
-        )
+        chooser_card.add_widget(chooser)
+        chooser_card.add_widget(back_button)
 
         self.root_box.clear_widgets()
 
-        self.root_box.add_widget(
-            self.title_label
-        )
-
-        self.root_box.add_widget(
-            self.subtitle
-        )
-
-        self.root_box.add_widget(
-            chooser_card
-        )
+        self.root_box.add_widget(self.title_label)
+        self.root_box.add_widget(self.subtitle)
+        self.root_box.add_widget(chooser_card)
 
         self.status.text = (
-            "اختاري الصورة المراد تحليلها"
+            "Choose the image you want to analyze"
         )
 
     # ========================================================
@@ -853,36 +757,29 @@ class GothicOCRApp(App):
 
         selected_path = selection[0]
 
-        path = Path(
-            selected_path
-        )
+        path = Path(selected_path)
 
         if not path.is_file():
 
             self.status.text = (
-                "تعذر الوصول إلى الصورة"
+                "Unable to access the selected image"
             )
 
             return
 
-        self.selected_image = str(
-            path
-        )
+        self.selected_image = str(path)
 
-        self.preview.source = (
-            self.selected_image
-        )
-
+        self.preview.source = self.selected_image
         self.preview.reload()
 
         self.result.text = (
-            "الصورة جاهزة للتحليل"
+            "Image is ready for analysis"
         )
 
         self._reset_stats()
 
         self.status.text = (
-            "✦ تم اختيار الصورة بنجاح ✦"
+            "✦ Image selected successfully ✦"
         )
 
         self._show_main_layout()
@@ -900,9 +797,7 @@ class GothicOCRApp(App):
 
             try:
 
-                camera_permission = (
-                    Permission.CAMERA
-                )
+                camera_permission = Permission.CAMERA
 
                 if not check_permission(
                     camera_permission
@@ -915,7 +810,8 @@ class GothicOCRApp(App):
                     )
 
                     self.status.text = (
-                        "اسمحي للتطبيق باستخدام الكاميرا ثم اضغطي الكاميرا مرة أخرى 📷"
+                        "Allow camera permission, "
+                        "then tap the Camera button again 📷"
                     )
 
                     return
@@ -947,7 +843,7 @@ class GothicOCRApp(App):
         self.camera_running = True
 
         capture_button = PremiumButton(
-            text="●  التقاط وتحليل الصورة",
+            text="●  CAPTURE AND ANALYZE",
             font_name=self.ui_font,
             button_color=GOLD,
         )
@@ -964,7 +860,7 @@ class GothicOCRApp(App):
         )
 
         back_button = PremiumButton(
-            text="← رجوع",
+            text="←  BACK",
             font_name=self.ui_font,
             button_color=PURPLE_DARK,
         )
@@ -1000,7 +896,7 @@ class GothicOCRApp(App):
 
         self.root_box.add_widget(
             Label(
-                text="📷 الكاميرا",
+                text="📷 CAMERA",
                 font_size="22sp",
                 color=GOLD,
                 font_name=self.ui_font,
@@ -1014,7 +910,7 @@ class GothicOCRApp(App):
         )
 
         self.status.text = (
-            "وجهي الكاميرا نحو النص القوطي"
+            "Point the camera toward the Gothic text"
         )
 
     # ========================================================
@@ -1032,7 +928,7 @@ class GothicOCRApp(App):
         ):
 
             self.status.text = (
-                "الكاميرا غير جاهزة"
+                "Camera is not ready"
             )
 
             return
@@ -1073,13 +969,13 @@ class GothicOCRApp(App):
             self.preview.reload()
 
             self.result.text = (
-                "تم التقاط الصورة — جاهزة للتحليل"
+                "Image captured — ready for analysis"
             )
 
             self._reset_stats()
 
             self.status.text = (
-                "✦ تم التقاط الصورة بنجاح ✦"
+                "✦ Image captured successfully ✦"
             )
 
             self._show_main_layout()
@@ -1087,12 +983,10 @@ class GothicOCRApp(App):
         except Exception as exc:
 
             self.status.text = (
-                "تعذر التقاط الصورة"
+                "Unable to capture image"
             )
 
-            self.result.text = str(
-                exc
-            )
+            self.result.text = str(exc)
 
     # ========================================================
     # STOP CAMERA
@@ -1139,7 +1033,7 @@ class GothicOCRApp(App):
         if not self.selected_image:
 
             self.status.text = (
-                "⚠ اختاري صورة أولًا"
+                "⚠ Please select an image first"
             )
 
             return
@@ -1147,26 +1041,22 @@ class GothicOCRApp(App):
         if self.analyze_button.disabled:
             return
 
-        image_path = (
-            self.selected_image
-        )
+        image_path = self.selected_image
 
-        if not Path(
-            image_path
-        ).is_file():
+        if not Path(image_path).is_file():
 
             self.status.text = (
-                "الصورة غير موجودة"
+                "Selected image no longer exists"
             )
 
             return
 
         self.status.text = (
-            "✦ جاري تحليل الصورة... ✦"
+            "✦ Analyzing image... ✦"
         )
 
         self.result.text = (
-            "⌛ جاري استخراج الحروف..."
+            "⌛ Extracting Gothic characters..."
         )
 
         self.analyze_button.disabled = True
@@ -1192,9 +1082,7 @@ class GothicOCRApp(App):
 
             if self.ocr is None:
 
-                from services.model_service import (
-                    GothicOCR
-                )
+                from services.model_service import GothicOCR
 
                 self.ocr = GothicOCR(
                     MODEL_PATH
@@ -1222,7 +1110,7 @@ class GothicOCRApp(App):
             ):
 
                 raise RuntimeError(
-                    "ناتج OCR غير صالح"
+                    "Invalid OCR result"
                 )
 
             recognized_text = (
@@ -1236,14 +1124,6 @@ class GothicOCRApp(App):
             detections = (
                 result.get(
                     "detections",
-                    [],
-                )
-                or []
-            )
-
-            lines = (
-                result.get(
-                    "lines",
                     [],
                 )
                 or []
@@ -1274,7 +1154,7 @@ class GothicOCRApp(App):
             if not recognized_text.strip():
 
                 recognized_text = (
-                    "لم يتم العثور على نص قوطي"
+                    "No Gothic text was detected"
                 )
 
             statistics = (
@@ -1321,7 +1201,7 @@ class GothicOCRApp(App):
                 )
 
                 self.status.text = (
-                    f"✦ جاري التحليل... "
+                    f"✦ Analyzing... "
                     f"{percent}% "
                     f"({current}/{total})"
                 )
@@ -1339,9 +1219,7 @@ class GothicOCRApp(App):
         detections,
     ):
 
-        count = len(
-            detections
-        )
+        count = len(detections)
 
         confidences = []
 
@@ -1418,19 +1296,15 @@ class GothicOCRApp(App):
         }
 
         self.status.text = (
-            "✦ تم التحليل بنجاح ✦"
+            "✦ Analysis completed successfully ✦"
         )
 
-        self.result.text = (
-            recognized_text
-        )
+        self.result.text = recognized_text
 
-        self.char_stat.value_label.text = (
-            str(
-                statistics.get(
-                    "count",
-                    0,
-                )
+        self.char_stat.value_label.text = str(
+            statistics.get(
+                "count",
+                0,
             )
         )
 
@@ -1449,14 +1323,12 @@ class GothicOCRApp(App):
             f"{average_confidence:.1f}%"
         )
 
-        lines = (
-            self._estimate_line_count(
-                recognized_text
-            )
+        lines = self._estimate_line_count(
+            recognized_text
         )
 
-        self.line_stat.value_label.text = (
-            str(lines)
+        self.line_stat.value_label.text = str(
+            lines
         )
 
         if cache_hit:
@@ -1509,11 +1381,11 @@ class GothicOCRApp(App):
     ):
 
         self.status.text = (
-            "✦ حدث خطأ أثناء التحليل ✦"
+            "✦ An error occurred during analysis ✦"
         )
 
         self.result.text = (
-            f"تعذر تحليل الصورة:\n{error_msg}"
+            f"Unable to analyze the image:\n{error_msg}"
         )
 
         self.char_stat.value_label.text = "—"
