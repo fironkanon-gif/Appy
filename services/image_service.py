@@ -641,4 +641,4 @@ class ImageService:
             image=image,
             overlap=overlap,
             tile_size=tile_size,
-                )
+        )
