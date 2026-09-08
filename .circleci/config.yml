@@ -279,6 +279,35 @@ jobs:
 
 
       # ============================================================
+      # ADDITIONAL ANDROID SDK SETUP
+      # ============================================================
+      - run:
+          name: Additional Android SDK setup
+          command: |
+            #!/bin/bash
+
+            source "$BASH_ENV"
+
+            echo "=== Installing Android SDK packages ==="
+
+            sdkmanager \
+              "platform-tools" \
+              "platforms;android-35" \
+              "build-tools;35.0.0"
+
+            echo "=== Accepting Android licenses ==="
+
+            set +o pipefail
+            yes | sdkmanager --licenses >/dev/null 2>&1 || true
+            set -o pipefail
+
+            echo "=== Android SDK setup completed ==="
+
+            sdkmanager --list_installed | grep -E \
+            "platform-tools|platforms;android-35|build-tools;35.0.0" || true
+
+
+      # ============================================================
       # 12. VERIFY AIDL
       # ============================================================
       - run:
