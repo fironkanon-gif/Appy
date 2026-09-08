@@ -161,7 +161,9 @@ jobs:
             echo "===== INSTALLED PACKAGES ====="
 
             python -m pip show Cython
-            python -m pip show pytest
+            python -m pytest -q \
+             tests/test_decoder.py \
+             tests/test_image_service.py
             python -m pip show numpy
             python -m pip show Pillow
             python -m pip show buildozer
