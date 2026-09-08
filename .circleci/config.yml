@@ -2,7 +2,6 @@ version: 2.1
 
 jobs:
   build_android:
-
     docker:
       - image: cimg/android:2026.08.1-ndk
 
@@ -11,7 +10,6 @@ jobs:
     working_directory: ~/project
 
     steps:
-
       # ============================================================
       # 1. DOWNLOAD PROJECT
       # ============================================================
@@ -40,14 +38,12 @@ jobs:
             echo "ANDROID_HOME=${ANDROID_HOME:-}"
             echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
 
-            echo "===== AVAILABLE TOOLS ====="
             command -v sdkmanager || true
             command -v git || true
-            command -v python3 || true
 
 
       # ============================================================
-      # 3. INSTALL SYSTEM DEPENDENCIES
+      # 3. INSTALL ALL SYSTEM DEPENDENCIES
       # ============================================================
       - run:
           name: Install system dependencies
@@ -77,21 +73,18 @@ jobs:
               cmake \
               libffi-dev \
               libssl-dev \
-              libbz2-dev \
-              liblzma-dev \
-              libsqlite3-dev \
-              libreadline-dev \
               gettext \
-              build-essential
+              build-essential \
+              ccache \
+              patch \
+              wget
 
-            echo "===== INSTALLED VERSIONS ====="
             java -version
             python3 --version
-            git --version
 
 
       # ============================================================
-      # 4. CREATE BUILD ENVIRONMENT
+      # 4. CREATE PYTHON BUILD ENVIRONMENT
       # ============================================================
       - run:
           name: Install Buildozer and Cython
@@ -147,11 +140,9 @@ jobs:
             test -f services/model_service.py
             test -f services/text_decoder.py
 
-            echo "===== FILE SIZES ====="
+            echo "===== JAVA BRIDGE ====="
 
-            ls -lh models/gothic_ocr.tflite
-            ls -lh data/labels.json
-            ls -lh fonts/NotoSansGothic-Regular.ttf
+            test -f java/org/gothicocr/TFLiteBridge.java
 
             echo "All required project files found."
 
@@ -166,24 +157,45 @@ jobs:
 
             source ~/buildozer-venv/bin/activate
 
-            echo "===== COMPILING MAIN ====="
-
-            python -m py_compile main.py
-
-            echo "===== COMPILING SERVICES ====="
-
-            python -m compileall -q services
-
-            if [ -d tests ]; then
-              echo "===== COMPILING TESTS ====="
-              python -m compileall -q tests
-            fi
+            python -m compileall -q \
+              main.py \
+              services \
+              tests
 
             echo "Python syntax validation successful."
 
 
       # ============================================================
-      # 7. VALIDATE BUILDOZER
+      # 7. VALIDATE TFLITE CONFIGURATION
+      # ============================================================
+      - run:
+          name: Validate TensorFlow Lite configuration
+          command: |
+            set -eux
+
+            echo "===== TFLITE GRADLE DEPENDENCY ====="
+
+            grep -F \
+              "org.tensorflow:tensorflow-lite" \
+              buildozer.spec
+
+            echo "===== JAVA SOURCE CONFIG ====="
+
+            grep -E \
+              '^android.add_src[[:space:]]*=[[:space:]]*java' \
+              buildozer.spec
+
+            echo "===== TFLITE JAVA BRIDGE ====="
+
+            grep -F \
+              "class TFLiteBridge" \
+              java/org/gothicocr/TFLiteBridge.java
+
+            echo "TensorFlow Lite configuration validated."
+
+
+      # ============================================================
+      # 8. VALIDATE BUILDOZER
       # ============================================================
       - run:
           name: Validate Buildozer
@@ -192,13 +204,9 @@ jobs:
 
             source ~/buildozer-venv/bin/activate
 
-            echo "===== TOOL PATHS ====="
-
             command -v python
             command -v cython
             command -v buildozer
-
-            echo "===== TOOL VERSIONS ====="
 
             python --version
             cython --version
@@ -209,167 +217,54 @@ jobs:
             echo "===== BUILDOZER CONFIGURATION ====="
 
             grep -E \
-              '^(title|package.name|package.domain|version|source.dir|requirements|android.api|android.minapi|android.archs|android.ndk|android.gradle_dependencies|p4a.branch)' \
+              '^(title|package.name|package.domain|version|source.dir|source.include_exts|requirements|android.api|android.minapi|android.archs|android.ndk|android.gradle_dependencies|android.add_src|p4a.branch)' \
               buildozer.spec || true
 
 
       # ============================================================
-      # 8. VALIDATE ANDROID SDK
+      # 9. VALIDATE ANDROID SDK
       # ============================================================
       - run:
           name: Validate Android SDK
           command: |
             set -eux
 
-            echo "===== ANDROID ENVIRONMENT ====="
-
             echo "ANDROID_HOME=${ANDROID_HOME:-}"
             echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
 
-            echo "===== SDKMANAGER ====="
-
-            command -v sdkmanager || true
-
-            if command -v sdkmanager >/dev/null 2>&1; then
+            if command -v sdkmanager >/dev/null 2>&1
+            then
               sdkmanager --version
             else
-              echo "WARNING: sdkmanager is not directly available in PATH"
+              echo "WARNING: sdkmanager is not in PATH"
             fi
 
-            echo "Android SDK validation completed."
-
 
       # ============================================================
-      # 9. CLEAN ANDROID ENVIRONMENT + PERMANENT AIDL FIX
+      # 10. VALIDATE MODEL SIZE
       # ============================================================
       - run:
-          name: Clean Android environment and fix AIDL
+          name: Validate model file
           command: |
             set -eux
 
-            echo "========================================"
-            echo "CLEAN OLD BUILDOZER ANDROID ENVIRONMENT"
-            echo "========================================"
+            echo "===== MODEL FILE ====="
 
-            rm -rf .buildozer
-            rm -rf ~/.buildozer
-            rm -rf ~/.gradle/caches
-            rm -rf ~/.gradle/daemon
+            ls -lh models/gothic_ocr.tflite
 
-            mkdir -p ~/.gradle
+            MODEL_SIZE=$(stat -c%s models/gothic_ocr.tflite)
 
-            echo "========================================"
-            echo "ANDROID SDK"
-            echo "========================================"
-
-            export ANDROID_SDK_ROOT="${ANDROID_HOME}"
-            export ANDROIDSDK="${ANDROID_HOME}"
-
-            echo "ANDROID_HOME=${ANDROID_HOME}"
-            echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}"
-
-            SDKMANAGER="$(find "${ANDROID_HOME}" \
-              -type f \
-              -name sdkmanager \
-              -perm -111 \
-              | head -n 1)"
-
-            if [ -z "${SDKMANAGER}" ]; then
-              echo "ERROR: sdkmanager not found"
-              find "${ANDROID_HOME}" \
-                -type f \
-                -name sdkmanager \
-                -print || true
+            if [ "$MODEL_SIZE" -lt 1000 ]
+            then
+              echo "ERROR: TFLite model appears invalid or empty"
               exit 1
             fi
 
-            echo "SDKMANAGER=${SDKMANAGER}"
-
-            echo "========================================"
-            echo "SDKMANAGER VERSION"
-            echo "========================================"
-
-            "${SDKMANAGER}" --version
-
-            echo "========================================"
-            echo "ACCEPT LICENSES"
-            echo "========================================"
-
-            yes | "${SDKMANAGER}" \
-              --sdk_root="${ANDROID_HOME}" \
-              --licenses || true
-
-            echo "========================================"
-            echo "UPDATE SDK REPOSITORIES"
-            echo "========================================"
-
-            "${SDKMANAGER}" \
-              --sdk_root="${ANDROID_HOME}" \
-              --update
-
-            echo "========================================"
-            echo "INSTALL REQUIRED ANDROID PACKAGES"
-            echo "========================================"
-
-            "${SDKMANAGER}" \
-              --sdk_root="${ANDROID_HOME}" \
-              "platform-tools" \
-              "platforms;android-35" \
-              "build-tools;35.0.0" \
-              "build-tools;37.0.0"
-
-            echo "========================================"
-            echo "VERIFY BUILD TOOLS 37"
-            echo "========================================"
-
-            AIDL37="${ANDROID_HOME}/build-tools/37.0.0/aidl"
-
-            if [ ! -f "${AIDL37}" ]; then
-              echo "ERROR: AIDL 37.0.0 WAS NOT INSTALLED"
-
-              echo "AVAILABLE BUILD TOOLS:"
-              ls -la "${ANDROID_HOME}/build-tools" || true
-
-              echo "SEARCHING FOR AIDL:"
-              find "${ANDROID_HOME}" \
-                -type f \
-                -name aidl \
-                -print || true
-
-              exit 1
-            fi
-
-            chmod +x "${AIDL37}"
-
-            echo "========================================"
-            echo "AIDL LOCATION"
-            echo "========================================"
-
-            ls -lh "${AIDL37}"
-
-            "${AIDL37}" --version || true
-
-            echo "========================================"
-            echo "CREATE STABLE BUILD TOOLS PATH"
-            echo "========================================"
-
-            export PATH="${ANDROID_HOME}/platform-tools:${ANDROID_HOME}/build-tools/37.0.0:${PATH}"
-
-            command -v aidl
-
-            echo "========================================"
-            echo "AIDL FINAL TEST"
-            echo "========================================"
-
-            aidl --version || true
-
-            echo "========================================"
-            echo "ANDROID ENVIRONMENT READY"
-            echo "========================================"
+            echo "Model file validation successful."
 
 
       # ============================================================
-      # 10. FINAL PRE-BUILD CHECK
+      # 11. FINAL PRE-BUILD CHECK
       # ============================================================
       - run:
           name: Final pre-build verification
@@ -380,40 +275,46 @@ jobs:
 
             echo "===== FINAL TOOL CHECK ====="
 
-            command -v python
-            command -v cython
-            command -v buildozer
-
             python --version
             cython --version
             buildozer --version
 
-            echo "===== GIT ====="
-            git --version
-
             echo "===== JAVA ====="
             java -version
+
+            echo "===== GIT ====="
+            git --version
 
             echo "===== DISK ====="
             df -h
 
-            echo "===== MEMORY ====="
-            free -h || true
-
-            echo "===== ANDROID SDK ====="
-            echo "ANDROID_HOME=${ANDROID_HOME}"
-
-            echo "===== VERIFY AIDL ONE LAST TIME ====="
-
-            test -f "${ANDROID_HOME}/build-tools/37.0.0/aidl"
-
-            echo "AIDL IS AVAILABLE"
+            echo "===== PROJECT TREE ====="
+            find . \
+              -maxdepth 3 \
+              -type f \
+              | sort \
+              | head -200
 
             echo "PRE-BUILD VALIDATION PASSED"
 
 
       # ============================================================
-      # 11. BUILD APK
+      # 12. CLEAN OLD BUILD
+      # ============================================================
+      - run:
+          name: Clean old Android build
+          command: |
+            set -eux
+
+            source ~/buildozer-venv/bin/activate
+
+            rm -rf bin
+
+            echo "Old APK output removed."
+
+
+      # ============================================================
+      # 13. BUILD APK
       # ============================================================
       - run:
           name: Build Android APK
@@ -423,56 +324,23 @@ jobs:
 
             source ~/buildozer-venv/bin/activate
 
-            # --------------------------------------------------------
-            # FORCE SINGLE ANDROID SDK
-            # --------------------------------------------------------
-
-            export ANDROIDSDK="${ANDROID_HOME}"
-            export ANDROID_SDK_ROOT="${ANDROID_HOME}"
-
-            export ANDROIDAPI=35
-            export ANDROIDMINAPI=23
-
-            export PATH="${ANDROID_HOME}/platform-tools:${ANDROID_HOME}/build-tools/37.0.0:${PATH}"
-
             echo "===== ACTIVE ENVIRONMENT ====="
-
-            echo "ANDROIDSDK=${ANDROIDSDK}"
-            echo "ANDROID_HOME=${ANDROID_HOME}"
-            echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}"
-
-            echo "===== TOOL PATHS ====="
 
             command -v python
             command -v cython
             command -v buildozer
-            command -v aidl
-
-            echo "===== TOOL VERSIONS ====="
 
             python --version
             cython --version
             buildozer --version
 
-            echo "===== VERIFY AIDL BEFORE BUILD ====="
-
-            AIDL_PATH="${ANDROID_HOME}/build-tools/37.0.0/aidl"
-
-            test -f "${AIDL_PATH}"
-
-            chmod +x "${AIDL_PATH}" || true
-
-            ls -lh "${AIDL_PATH}"
-
-            echo "AIDL READY FOR BUILD"
-
             echo "===== START BUILD ====="
 
-            buildozer android debug
+            buildozer -v android debug
 
 
       # ============================================================
-      # 12. VERIFY APK
+      # 14. VERIFY APK
       # ============================================================
       - run:
           name: Verify generated APK
@@ -481,19 +349,11 @@ jobs:
 
             echo "===== BIN DIRECTORY ====="
 
-            if [ ! -d bin ]; then
+            if [ ! -d bin ]
+            then
               echo "ERROR: bin directory does not exist"
               exit 1
             fi
-
-            echo "===== GENERATED FILES ====="
-
-            find bin \
-              -maxdepth 2 \
-              -type f \
-              -print
-
-            echo "===== APK FILES ====="
 
             find bin \
               -type f \
@@ -502,12 +362,13 @@ jobs:
 
             APK_COUNT=$(find bin -type f -name "*.apk" | wc -l)
 
-            if [ "${APK_COUNT}" -lt 1 ]; then
+            if [ "$APK_COUNT" -lt 1 ]
+            then
               echo "ERROR: No APK was generated"
               exit 1
             fi
 
-            echo "===== APK SIZE ====="
+            echo "===== APK DETAILS ====="
 
             find bin \
               -type f \
@@ -518,7 +379,7 @@ jobs:
 
 
       # ============================================================
-      # 13. SAVE APK
+      # 15. SAVE APK
       # ============================================================
       - store_artifacts:
           path: bin
