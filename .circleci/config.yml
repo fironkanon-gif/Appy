@@ -2,6 +2,7 @@ version: 2.1
 
 jobs:
   build_android:
+
     docker:
       - image: cimg/android:2026.08.1-ndk
 
@@ -39,8 +40,10 @@ jobs:
             echo "ANDROID_HOME=${ANDROID_HOME:-}"
             echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
 
-            command -v sdkmanager
+            echo "===== TOOLS ====="
+            command -v sdkmanager || true
             command -v git
+            command -v python3
 
 
       # ============================================================
@@ -80,18 +83,46 @@ jobs:
               patch \
               wget
 
-            echo "===== JAVA 17 ====="
-            /usr/lib/jvm/java-17-openjdk-amd64/bin/java -version
+            echo "===== JAVA ====="
+            java -version
 
             echo "===== PYTHON ====="
             python3 --version
 
 
       # ============================================================
-      # 4. CREATE PYTHON BUILD ENVIRONMENT
+      # 4. CONFIGURE JAVA 17
       # ============================================================
       - run:
-          name: Install Buildozer, Cython and Pytest
+          name: Configure Java 17
+          command: |
+            set -eux
+
+            JAVA_17_HOME="/usr/lib/jvm/java-17-openjdk-amd64"
+
+            if [ ! -d "$JAVA_17_HOME" ]
+            then
+              JAVA_17_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")"
+            fi
+
+            test -d "$JAVA_17_HOME"
+
+            echo "export JAVA_HOME=$JAVA_17_HOME" >> "$BASH_ENV"
+            echo 'export PATH=$JAVA_HOME/bin:$PATH' >> "$BASH_ENV"
+
+            source "$BASH_ENV"
+
+            echo "JAVA_HOME=$JAVA_HOME"
+
+            java -version
+            javac -version
+
+
+      # ============================================================
+      # 5. CREATE PYTHON BUILD ENVIRONMENT
+      # ============================================================
+      - run:
+          name: Install Buildozer Cython and Pytest
           command: |
             set -eux
 
@@ -121,13 +152,16 @@ jobs:
             python -m pip show pytest
             python -m pip show buildozer
 
+            echo "===== VERSIONS ====="
+
+            python --version
             cython --version
             pytest --version
             buildozer --version
 
 
       # ============================================================
-      # 5. VALIDATE PROJECT FILES
+      # 6. VALIDATE PROJECT FILES
       # ============================================================
       - run:
           name: Validate project files
@@ -151,13 +185,11 @@ jobs:
             test -f tests/test_decoder.py
             test -f tests/test_image_service.py
 
-
-
             echo "All required project files found."
 
 
       # ============================================================
-      # 6. VALIDATE PYTHON SYNTAX
+      # 7. VALIDATE PYTHON SYNTAX
       # ============================================================
       - run:
           name: Validate Python syntax
@@ -175,7 +207,7 @@ jobs:
 
 
       # ============================================================
-      # 7. RUN PROJECT TESTS
+      # 8. RUN PROJECT TESTS
       # ============================================================
       - run:
           name: Run Python tests
@@ -192,16 +224,36 @@ jobs:
 
 
       # ============================================================
-      # 8. VALIDATE BUILDOZER CONFIGURATION
+      # 9. VALIDATE MODEL
+      # ============================================================
+      - run:
+          name: Validate model file
+          command: |
+            set -eux
+
+            ls -lh models/gothic_ocr.tflite
+
+            MODEL_SIZE=$(stat -c%s models/gothic_ocr.tflite)
+
+            if [ "$MODEL_SIZE" -lt 1000 ]
+            then
+              echo "ERROR: TFLite model is empty or invalid."
+              exit 1
+            fi
+
+            echo "Model size: $MODEL_SIZE bytes"
+            echo "Model validation successful."
+
+
+      # ============================================================
+      # 10. VALIDATE BUILDOZER CONFIGURATION
       # ============================================================
       - run:
           name: Validate Buildozer configuration
           command: |
             set -eux
 
-            grep -F \
-              "android.ndk = 28c" \
-              buildozer.spec
+            echo "===== CHECKING BUILDOZER CONFIG ====="
 
             grep -F \
               "android.api = 35" \
@@ -212,72 +264,100 @@ jobs:
               buildozer.spec
 
             grep -F \
+              "android.ndk = 28c" \
+              buildozer.spec
+
+            grep -F \
               "org.tensorflow:tensorflow-lite:2.17.0" \
               buildozer.spec
 
-            
-
             grep -F \
-              "android.permissions = CAMERA,READ_EXTERNAL_STORAGE,READ_MEDIA_IMAGES" \
+              "requirements = python3,kivy,numpy,pillow,pyjnius" \
               buildozer.spec
 
             echo "Buildozer configuration validated."
 
 
       # ============================================================
-      # 9. CONFIGURE JAVA 17
+      # 11. CONFIGURE ANDROID SDK
       # ============================================================
       - run:
-          name: Configure Java 17
+          name: Configure Android SDK
           command: |
             set -eux
 
-            echo 'export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64' >> "$BASH_ENV"
-            echo 'export PATH=/usr/lib/jvm/java-17-openjdk-amd64/bin:$PATH' >> "$BASH_ENV"
+            SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
 
-            source "$BASH_ENV"
-
-            echo "JAVA_HOME=$JAVA_HOME"
-
-            java -version
-            javac -version
-
-
-      # ============================================================
-      # 10. CONFIGURE ANDROID SDK AND NDK
-      # ============================================================
-      - run:
-          name: Configure Android SDK and NDK
-          command: |
-            set -eux
-
-            SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/home/circleci/android-sdk}}"
-
-            NDK_ROOT="/home/circleci/android-sdk/ndk/28.2.13676358"
+            if [ -z "$SDK_ROOT" ]
+            then
+              echo "ERROR: Android SDK was not found."
+              exit 1
+            fi
 
             test -d "$SDK_ROOT"
-            test -d "$NDK_ROOT"
 
             echo "export ANDROID_HOME=$SDK_ROOT" >> "$BASH_ENV"
             echo "export ANDROID_SDK_ROOT=$SDK_ROOT" >> "$BASH_ENV"
-
             echo "export ANDROIDSDK=$SDK_ROOT" >> "$BASH_ENV"
-            echo "export ANDROIDNDK=$NDK_ROOT" >> "$BASH_ENV"
-
-            echo "export ANDROIDAPI=35" >> "$BASH_ENV"
-            echo "export NDKAPI=24" >> "$BASH_ENV"
 
             source "$BASH_ENV"
 
+            echo "ANDROID_HOME=$ANDROID_HOME"
+            echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
             echo "ANDROIDSDK=$ANDROIDSDK"
-            echo "ANDROIDNDK=$ANDROIDNDK"
 
             ls -la "$ANDROIDSDK"
-            ls -la "$ANDROIDNDK" | head
 
 
       # ============================================================
-      # 11. ACCEPT ANDROID LICENSES
+      # 12. LOCATE SDKMANAGER
+      # ============================================================
+      - run:
+          name: Locate Android sdkmanager
+          command: |
+            set -eux
+
+            source "$BASH_ENV"
+
+            SDKMANAGER=""
+
+            if [ -f "$ANDROIDSDK/cmdline-tools/latest/bin/sdkmanager" ]
+            then
+              SDKMANAGER="$ANDROIDSDK/cmdline-tools/latest/bin/sdkmanager"
+
+            elif command -v sdkmanager >/dev/null 2>&1
+            then
+              SDKMANAGER="$(command -v sdkmanager)"
+
+            else
+              FOUND=$(find "$ANDROIDSDK" \
+                -type f \
+                -path "*/bin/sdkmanager" \
+                | head -n 1 || true)
+
+              if [ -n "$FOUND" ]
+              then
+                SDKMANAGER="$FOUND"
+              fi
+            fi
+
+            if [ -z "$SDKMANAGER" ]
+            then
+              echo "ERROR: sdkmanager was not found."
+              exit 1
+            fi
+
+            chmod +x "$SDKMANAGER" || true
+
+            echo "export SDKMANAGER=$SDKMANAGER" >> "$BASH_ENV"
+
+            echo "SDKMANAGER=$SDKMANAGER"
+
+            "$SDKMANAGER" --version
+
+
+      # ============================================================
+      # 13. ACCEPT ANDROID LICENSES
       # ============================================================
       - run:
           name: Accept Android SDK licenses
@@ -290,22 +370,22 @@ jobs:
 
             set +e
 
-            yes | sdkmanager --licenses >/dev/null 2>&1
+            yes | "$SDKMANAGER" --licenses >/dev/null 2>&1
 
-            SDKMANAGER_STATUS=${PIPESTATUS[1]}
+            LICENSE_STATUS=${PIPESTATUS[1]}
 
             set -e
 
-            if [ "$SDKMANAGER_STATUS" -ne 0 ]
+            if [ "$LICENSE_STATUS" -ne 0 ]
             then
-              echo "WARNING: License command returned status $SDKMANAGER_STATUS"
+              echo "WARNING: License command returned $LICENSE_STATUS"
             fi
 
-            echo "Android SDK license step completed."
+            echo "Android license step completed."
 
 
       # ============================================================
-      # 12. INSTALL REQUIRED ANDROID SDK PACKAGES
+      # 14. INSTALL REQUIRED ANDROID SDK PACKAGES
       # ============================================================
       - run:
           name: Install Android SDK packages
@@ -314,34 +394,28 @@ jobs:
 
             source "$BASH_ENV"
 
-            echo "=== Installing Android SDK packages ==="
+            echo "===== INSTALLING ANDROID SDK PACKAGES ====="
 
-            sdkmanager \
+            "$SDKMANAGER" \
               "platform-tools" \
               "platforms;android-35" \
-              "build-tools;35.0.0" \
-              "cmdline-tools;latest"
+              "build-tools;35.0.0"
 
-            echo "=== Android SDK setup completed ==="
-
-            echo "===== VERIFYING SDK COMPONENTS ====="
+            echo "===== VERIFY SDK ====="
 
             test -d "$ANDROIDSDK/platform-tools"
-            test -d "$ANDROIDSDK/platforms/android-35"
-            test -d "$ANDROIDSDK/build-tools/35.0.0"
 
-            test -f \
-              "$ANDROIDSDK/cmdline-tools/latest/bin/sdkmanager"
+            test -d \
+              "$ANDROIDSDK/platforms/android-35"
 
-            echo "===== INSTALLED SDK COMPONENTS ====="
+            test -d \
+              "$ANDROIDSDK/build-tools/35.0.0"
 
-            sdkmanager --list_installed 2>/dev/null | grep -E \
-              "platform-tools|platforms;android-35|build-tools/35.0.0|cmdline-tools" \
-              || true
+            echo "===== SDK PACKAGES INSTALLED ====="
 
 
       # ============================================================
-      # 13. VERIFY AIDL
+      # 15. VERIFY AIDL
       # ============================================================
       - run:
           name: Verify AIDL
@@ -354,17 +428,90 @@ jobs:
 
             if [ ! -f "$AIDL" ]
             then
-              echo "ERROR: AIDL not found at:"
+              echo "ERROR: AIDL not found."
               echo "$AIDL"
               exit 1
             fi
+
+            chmod +x "$AIDL" || true
 
             echo "AIDL found:"
             echo "$AIDL"
 
 
       # ============================================================
-      # 14. PREPARE BUILDOZER SDK/NDK PATHS
+      # 16. LOCATE NDK 28
+      # ============================================================
+      - run:
+          name: Locate Android NDK
+          command: |
+            set -eux
+
+            source "$BASH_ENV"
+
+            NDK_ROOT=""
+
+            if [ -d "$ANDROIDSDK/ndk/28.2.13676358" ]
+            then
+              NDK_ROOT="$ANDROIDSDK/ndk/28.2.13676358"
+
+            else
+              FOUND_NDK=$(find "$ANDROIDSDK/ndk" \
+                -mindepth 1 \
+                -maxdepth 1 \
+                -type d \
+                2>/dev/null \
+                | sort \
+                | tail -n 1 || true)
+
+              if [ -n "$FOUND_NDK" ]
+              then
+                NDK_ROOT="$FOUND_NDK"
+              fi
+            fi
+
+            if [ -z "$NDK_ROOT" ]
+            then
+              echo "ERROR: Android NDK was not found."
+              echo "Available SDK directories:"
+              ls -la "$ANDROIDSDK" || true
+              exit 1
+            fi
+
+            test -d "$NDK_ROOT"
+
+            echo "export ANDROIDNDK=$NDK_ROOT" >> "$BASH_ENV"
+
+            source "$BASH_ENV"
+
+            echo "ANDROIDNDK=$ANDROIDNDK"
+
+            ls -la "$ANDROIDNDK" | head
+
+
+      # ============================================================
+      # 17. CONFIGURE BUILD ENVIRONMENT
+      # ============================================================
+      - run:
+          name: Configure Android Build Environment
+          command: |
+            set -eux
+
+            source "$BASH_ENV"
+
+            echo "export ANDROIDAPI=35" >> "$BASH_ENV"
+            echo "export NDKAPI=24" >> "$BASH_ENV"
+
+            source "$BASH_ENV"
+
+            echo "ANDROIDSDK=$ANDROIDSDK"
+            echo "ANDROIDNDK=$ANDROIDNDK"
+            echo "ANDROIDAPI=$ANDROIDAPI"
+            echo "NDKAPI=$NDKAPI"
+
+
+      # ============================================================
+      # 18. PREPARE BUILDOZER SDK AND NDK PATHS
       # ============================================================
       - run:
           name: Configure Buildozer Android paths
@@ -373,88 +520,74 @@ jobs:
 
             source "$BASH_ENV"
 
-            mkdir -p \
-              ~/.buildozer/android/platform
+            BUILDOZER_PLATFORM=~/.buildozer/android/platform
+
+            mkdir -p "$BUILDOZER_PLATFORM"
 
             rm -rf \
-              ~/.buildozer/android/platform/android-sdk
+              "$BUILDOZER_PLATFORM/android-sdk"
 
             rm -rf \
-              ~/.buildozer/android/platform/android-ndk-r28c
+              "$BUILDOZER_PLATFORM/android-ndk-r28c"
 
             ln -s \
               "$ANDROIDSDK" \
-              ~/.buildozer/android/platform/android-sdk
+              "$BUILDOZER_PLATFORM/android-sdk"
 
             ln -s \
               "$ANDROIDNDK" \
-              ~/.buildozer/android/platform/android-ndk-r28c
+              "$BUILDOZER_PLATFORM/android-ndk-r28c"
 
-            echo "===== FIX SDKMANAGER FOR JAVA 17 ====="
+            echo "===== BUILDOZER LINKS ====="
 
-            MODERN_SDKMANAGER="$ANDROIDSDK/cmdline-tools/latest/bin/sdkmanager"
+            ls -la "$BUILDOZER_PLATFORM"
 
-            test -f "$MODERN_SDKMANAGER"
+            echo "===== SDK LINK ====="
 
-            mkdir -p \
-              "$ANDROIDSDK/tools/bin"
+            test -d \
+              "$BUILDOZER_PLATFORM/android-sdk"
 
-            rm -f \
-              "$ANDROIDSDK/tools/bin/sdkmanager"
+            echo "===== NDK LINK ====="
 
-            ln -s \
-              "$MODERN_SDKMANAGER" \
-              "$ANDROIDSDK/tools/bin/sdkmanager"
-
-            echo "===== VERIFY MODERN SDKMANAGER ====="
-
-            "$ANDROIDSDK/tools/bin/sdkmanager" --version
-
-            echo "===== BUILDOZER ANDROID LINKS ====="
-
-            ls -la \
-              ~/.buildozer/android/platform
-
-            echo "===== SDK BUILD TOOLS ====="
-
-            ls -la \
-              ~/.buildozer/android/platform/android-sdk/build-tools/35.0.0
+            test -d \
+              "$BUILDOZER_PLATFORM/android-ndk-r28c"
 
             echo "===== AIDL ====="
 
             test -f \
-              ~/.buildozer/android/platform/android-sdk/build-tools/35.0.0/aidl
-
-            echo "===== SDKMANAGER LINK ====="
-
-            ls -la \
-              ~/.buildozer/android/platform/android-sdk/tools/bin/sdkmanager
+              "$BUILDOZER_PLATFORM/android-sdk/build-tools/35.0.0/aidl"
 
 
       # ============================================================
-      # 15. VALIDATE MODEL
+      # 19. CONFIGURE FREETYPE DOWNLOAD FALLBACK
       # ============================================================
       - run:
-          name: Validate model file
+          name: Configure FreeType fallback mirror
           command: |
             set -eux
 
-            ls -lh \
-              models/gothic_ocr.tflite
+            echo "===== CONFIGURING FREETYPE FALLBACK ====="
 
-            MODEL_SIZE=$(stat -c%s models/gothic_ocr.tflite)
+            echo 'export URL_freetype="https://nongnu.uib.no/freetype/freetype-{version}.tar.gz"' \
+              >> "$BASH_ENV"
 
-            if [ "$MODEL_SIZE" -lt 1000 ]
-            then
-              echo "ERROR: TFLite model is empty or invalid."
-              exit 1
-            fi
+            source "$BASH_ENV"
 
-            echo "Model validation successful."
+            echo "URL_freetype=$URL_freetype"
+
+            echo "===== TESTING FREETYPE MIRROR ====="
+
+            wget \
+              --spider \
+              --tries=3 \
+              --timeout=30 \
+              "https://nongnu.uib.no/freetype/freetype-2.14.1.tar.gz"
+
+            echo "FreeType mirror is reachable."
 
 
       # ============================================================
-      # 16. FINAL PRE-BUILD CHECK
+      # 20. FINAL PRE-BUILD CHECK
       # ============================================================
       - run:
           name: Final pre-build verification
@@ -463,6 +596,10 @@ jobs:
 
             source "$BASH_ENV"
             source ~/buildozer-venv/bin/activate
+
+            echo "========================================"
+            echo "FINAL PRE-BUILD VERIFICATION"
+            echo "========================================"
 
             echo "===== PYTHON ====="
             python --version
@@ -483,37 +620,42 @@ jobs:
             echo "===== SDK ====="
             echo "$ANDROIDSDK"
 
+            test -d "$ANDROIDSDK"
+
             echo "===== NDK ====="
             echo "$ANDROIDNDK"
+
+            test -d "$ANDROIDNDK"
+
+            echo "===== SDKMANAGER ====="
+            echo "$SDKMANAGER"
+
+            test -f "$SDKMANAGER"
 
             echo "===== AIDL ====="
 
             test -f \
               "$ANDROIDSDK/build-tools/35.0.0/aidl"
 
-            echo "===== MODERN SDKMANAGER ====="
+            echo "===== FREETYPE ====="
 
-            test -f \
-              "$ANDROIDSDK/cmdline-tools/latest/bin/sdkmanager"
-
-            echo "===== BUILDOZER SDKMANAGER ====="
-
-            test -L \
-              "$ANDROIDSDK/tools/bin/sdkmanager"
+            echo "$URL_freetype"
 
             echo "===== DISK ====="
 
             df -h
 
-            echo "===== FINAL TEST ====="
+            echo "===== FINAL PYTEST ====="
 
             pytest -q
 
-            echo "===== PRE-BUILD VALIDATION PASSED ====="
+            echo "========================================"
+            echo "PRE-BUILD VALIDATION PASSED"
+            echo "========================================"
 
 
       # ============================================================
-      # 17. CLEAN OUTPUT
+      # 21. CLEAN OLD OUTPUT
       # ============================================================
       - run:
           name: Clean old output
@@ -526,36 +668,7 @@ jobs:
 
 
       # ============================================================
-      # 18. CONFIGURE FREETYPE DOWNLOAD FALLBACK
-      # ============================================================
-      - run:
-          name: Configure FreeType fallback mirror
-          command: |
-            set -eux
-
-            echo "===== CONFIGURING FREETYPE FALLBACK ====="
-
-            echo 'export URL_freetype="https://nongnu.uib.no/freetype/freetype-{version}.tar.gz"' \
-              >> "$BASH_ENV"
-
-            source "$BASH_ENV"
-
-            echo "FreeType download URL override:"
-            echo "$URL_freetype"
-
-            echo "===== TESTING FREETYPE MIRROR ====="
-
-            wget \
-              --spider \
-              --tries=3 \
-              --timeout=30 \
-              "https://nongnu.uib.no/freetype/freetype-2.14.1.tar.gz"
-
-            echo "FreeType fallback mirror is reachable."
-
-
-      # ============================================================
-      # 19. BUILD APK
+      # 22. BUILD APK
       # ============================================================
       - run:
           name: Build Android APK
@@ -566,14 +679,25 @@ jobs:
             source "$BASH_ENV"
             source ~/buildozer-venv/bin/activate
 
-            echo "===== ACTIVE BUILD ENVIRONMENT ====="
+            echo "========================================"
+            echo "ACTIVE BUILD ENVIRONMENT"
+            echo "========================================"
 
             echo "JAVA_HOME=$JAVA_HOME"
+
             echo "ANDROIDSDK=$ANDROIDSDK"
+
             echo "ANDROIDNDK=$ANDROIDNDK"
+
             echo "ANDROIDAPI=$ANDROIDAPI"
+
             echo "NDKAPI=$NDKAPI"
+
+            echo "SDKMANAGER=$SDKMANAGER"
+
             echo "URL_freetype=$URL_freetype"
+
+            echo "========================================"
 
             echo "===== JAVA ====="
 
@@ -588,21 +712,9 @@ jobs:
 
             cython --version
 
-            echo "===== PYTEST ====="
-
-            pytest -q
-
             echo "===== BUILDOZER ====="
 
             buildozer --version
-
-            echo "===== SDKMANAGER ====="
-
-            "$ANDROIDSDK/tools/bin/sdkmanager" --version
-
-            echo "===== FREETYPE SOURCE ====="
-
-            echo "$URL_freetype"
 
             echo "===== START BUILD ====="
 
@@ -610,7 +722,7 @@ jobs:
 
 
       # ============================================================
-      # 20. VERIFY APK
+      # 23. VERIFY APK
       # ============================================================
       - run:
           name: Verify generated APK
@@ -630,7 +742,12 @@ jobs:
               -name "*.apk" \
               -print
 
-            APK_COUNT=$(find bin -type f -name "*.apk" | wc -l)
+            APK_COUNT=$(
+              find bin \
+                -type f \
+                -name "*.apk" \
+                | wc -l
+            )
 
             if [ "$APK_COUNT" -lt 1 ]
             then
@@ -645,11 +762,13 @@ jobs:
               -name "*.apk" \
               -exec ls -lh {} \;
 
+            echo "========================================"
             echo "APK BUILD SUCCESSFUL"
+            echo "========================================"
 
 
       # ============================================================
-      # 21. SAVE APK
+      # 24. SAVE APK
       # ============================================================
       - store_artifacts:
           path: bin
@@ -657,6 +776,9 @@ jobs:
 
 
 workflows:
+
   build_android:
+
     jobs:
+
       - build_android
