@@ -40,8 +40,10 @@ jobs:
             echo "ANDROID_HOME=${ANDROID_HOME:-}"
             echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
 
+            echo "===== AVAILABLE TOOLS ====="
             command -v sdkmanager || true
             command -v git || true
+            command -v python3 || true
 
 
       # ============================================================
@@ -75,16 +77,42 @@ jobs:
               cmake \
               libffi-dev \
               libssl-dev \
+              libbz2-dev \
+              liblzma-dev \
+              libsqlite3-dev \
+              libreadline-dev \
               gettext \
-              build-essential
+              build-essential \
+              ccache
 
+            echo "===== INSTALLED VERSIONS ====="
             java -version
             python3 --version
             git --version
 
+            echo "===== CCACHE ====="
+            ccache --version || true
+
 
       # ============================================================
-      # 4. CREATE BUILD ENVIRONMENT
+      # 4. CONFIGURE BUILD CACHE
+      # ============================================================
+      - run:
+          name: Configure build cache
+          command: |
+            set -eux
+
+            mkdir -p ~/.buildozer
+            mkdir -p ~/.gradle
+
+            export USE_CCACHE=1
+            ccache -M 2G || true
+
+            echo "Build cache configured."
+
+
+      # ============================================================
+      # 5. CREATE BUILD ENVIRONMENT
       # ============================================================
       - run:
           name: Install Buildozer and Cython
@@ -119,7 +147,7 @@ jobs:
 
 
       # ============================================================
-      # 5. VALIDATE PROJECT FILES
+      # 6. VALIDATE PROJECT FILES
       # ============================================================
       - run:
           name: Validate project files
@@ -140,11 +168,16 @@ jobs:
             test -f services/model_service.py
             test -f services/text_decoder.py
 
+            echo "===== FILE SIZES ====="
+            ls -lh models/gothic_ocr.tflite
+            ls -lh data/labels.json
+            ls -lh fonts/NotoSansGothic-Regular.ttf
+
             echo "All required project files found."
 
 
       # ============================================================
-      # 6. VALIDATE PYTHON SYNTAX
+      # 7. VALIDATE PYTHON SYNTAX
       # ============================================================
       - run:
           name: Validate Python syntax
@@ -153,9 +186,14 @@ jobs:
 
             source ~/buildozer-venv/bin/activate
 
-            python -m compileall -q main.py services
+            echo "===== COMPILING MAIN ====="
+            python -m py_compile main.py
+
+            echo "===== COMPILING SERVICES ====="
+            python -m compileall -q services
 
             if [ -d tests ]; then
+              echo "===== COMPILING TESTS ====="
               python -m compileall -q tests
             fi
 
@@ -163,7 +201,7 @@ jobs:
 
 
       # ============================================================
-      # 7. VALIDATE BUILDOZER
+      # 8. VALIDATE BUILDOZER
       # ============================================================
       - run:
           name: Validate Buildozer
@@ -172,9 +210,13 @@ jobs:
 
             source ~/buildozer-venv/bin/activate
 
+            echo "===== TOOL PATHS ====="
+
             command -v python
             command -v cython
             command -v buildozer
+
+            echo "===== TOOL VERSIONS ====="
 
             python --version
             cython --version
@@ -185,30 +227,36 @@ jobs:
             echo "===== BUILDOZER CONFIGURATION ====="
 
             grep -E \
-              '^(title|package.name|package.domain|version|source.dir|requirements|android.api|android.minapi|android.archs|android.ndk|p4a.branch)' \
+              '^(title|package.name|package.domain|version|source.dir|requirements|android.api|android.minapi|android.archs|android.ndk|android.gradle_dependencies|p4a.branch)' \
               buildozer.spec || true
 
 
       # ============================================================
-      # 8. VALIDATE ANDROID SDK
+      # 9. VALIDATE ANDROID SDK
       # ============================================================
       - run:
           name: Validate Android SDK
           command: |
             set -eux
 
+            echo "===== ANDROID ENVIRONMENT ====="
+
             echo "ANDROID_HOME=${ANDROID_HOME:-}"
             echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
+
+            echo "===== SDKMANAGER ====="
 
             if command -v sdkmanager >/dev/null 2>&1; then
               sdkmanager --version
             else
-              echo "WARNING: sdkmanager is not in PATH"
+              echo "WARNING: sdkmanager is not available in PATH"
             fi
+
+            echo "Android SDK validation completed."
 
 
       # ============================================================
-      # 9. FINAL PRE-BUILD CHECK
+      # 10. FINAL PRE-BUILD CHECK
       # ============================================================
       - run:
           name: Final pre-build verification
@@ -219,6 +267,10 @@ jobs:
 
             echo "===== FINAL TOOL CHECK ====="
 
+            command -v python
+            command -v cython
+            command -v buildozer
+
             python --version
             cython --version
             buildozer --version
@@ -226,14 +278,20 @@ jobs:
             echo "===== GIT ====="
             git --version
 
+            echo "===== JAVA ====="
+            java -version
+
             echo "===== DISK ====="
             df -h
+
+            echo "===== MEMORY ====="
+            free -h || true
 
             echo "PRE-BUILD VALIDATION PASSED"
 
 
       # ============================================================
-      # 10. BUILD APK
+      # 11. BUILD APK
       # ============================================================
       - run:
           name: Build Android APK
@@ -242,6 +300,8 @@ jobs:
             set -eux
 
             source ~/buildozer-venv/bin/activate
+
+            export USE_CCACHE=1
 
             echo "===== ACTIVE ENVIRONMENT ====="
 
@@ -259,7 +319,7 @@ jobs:
 
 
       # ============================================================
-      # 11. VERIFY APK
+      # 12. VERIFY APK
       # ============================================================
       - run:
           name: Verify generated APK
@@ -273,6 +333,12 @@ jobs:
               exit 1
             fi
 
+            echo "===== GENERATED FILES ====="
+
+            find bin -type f -maxdepth 2 -print
+
+            echo "===== APK FILES ====="
+
             find bin \
               -type f \
               -name "*.apk" \
@@ -285,11 +351,14 @@ jobs:
               exit 1
             fi
 
+            echo "===== APK SIZE ====="
+            find bin -type f -name "*.apk" -exec ls -lh {} \;
+
             echo "APK BUILD SUCCESSFUL"
 
 
       # ============================================================
-      # 12. SAVE APK
+      # 13. SAVE APK
       # ============================================================
       - store_artifacts:
           path: bin
