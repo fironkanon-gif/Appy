@@ -144,10 +144,6 @@ class GothicOCR:
             tensorflow.lite.Interpreter
         """
 
-        # --------------------------------------------------------
-        # TRY ANDROID / PYJNIUS
-        # --------------------------------------------------------
-
         android_available = False
 
         try:
@@ -169,6 +165,10 @@ class GothicOCR:
 
         except Exception:
             android_available = False
+
+        # --------------------------------------------------------
+        # ANDROID
+        # --------------------------------------------------------
 
         if android_available:
 
@@ -407,10 +407,6 @@ class GothicOCR:
     def _run_single_android(self, tensor):
         """
         Run one 1024x1024 tensor on Android.
-
-        Uses Java DirectByteBuffer and transfers
-        the output through a Java-compatible byte
-        array before converting it to NumPy.
         """
 
         input_array = np.asarray(
@@ -497,7 +493,7 @@ class GothicOCR:
         output_buffer.rewind()
 
         # --------------------------------------------------------
-        # READ JAVA BYTE BUFFER
+        # READ OUTPUT
         # --------------------------------------------------------
 
         raw_output = bytearray(
@@ -507,10 +503,6 @@ class GothicOCR:
         output_buffer.get(
             raw_output
         )
-
-        # --------------------------------------------------------
-        # CONVERT BYTES → FLOAT32
-        # --------------------------------------------------------
 
         output_array = np.frombuffer(
             raw_output,
@@ -529,8 +521,7 @@ class GothicOCR:
 
     def _run_single_desktop(self, tensor):
         """
-        Run one 1024x1024 tensor on desktop
-        TensorFlow Lite.
+        Run one 1024x1024 tensor on desktop.
         """
 
         inputs = (
@@ -810,7 +801,6 @@ class GothicOCR:
             ):
 
                 tensor = tile["input"]
-
                 meta = tile["meta"]
 
                 offset_x = float(
@@ -841,11 +831,23 @@ class GothicOCR:
                 # DECODE
                 # ----------------------------------------------
 
-                decoded = (
-                    self.decoder.decode(
-                        raw_output,
-                        meta=meta,
-                    )
+                decoded = self.decoder.decode(
+                    raw_output,
+                    original_width=int(
+                        meta["original_width"]
+                    ),
+                    original_height=int(
+                        meta["original_height"]
+                    ),
+                    scale=float(
+                        meta["scale"]
+                    ),
+                    pad_x=float(
+                        meta["pad_x"]
+                    ),
+                    pad_y=float(
+                        meta["pad_y"]
+                    ),
                 )
 
                 detections = decoded.get(
