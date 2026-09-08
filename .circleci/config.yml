@@ -2,6 +2,7 @@ version: 2.1
 
 jobs:
   build_android:
+
     docker:
       - image: cimg/android:2026.08.1-ndk
 
@@ -10,6 +11,7 @@ jobs:
     working_directory: ~/project
 
     steps:
+
       # ============================================================
       # 1. DOWNLOAD PROJECT
       # ============================================================
@@ -43,7 +45,7 @@ jobs:
 
 
       # ============================================================
-      # 3. INSTALL ALL SYSTEM DEPENDENCIES
+      # 3. INSTALL SYSTEM DEPENDENCIES
       # ============================================================
       - run:
           name: Install system dependencies
@@ -78,10 +80,11 @@ jobs:
 
             java -version
             python3 --version
+            git --version
 
 
       # ============================================================
-      # 4. CREATE PYTHON BUILD ENVIRONMENT
+      # 4. CREATE BUILD ENVIRONMENT
       # ============================================================
       - run:
           name: Install Buildozer and Cython
@@ -150,10 +153,11 @@ jobs:
 
             source ~/buildozer-venv/bin/activate
 
-            python -m compileall -q \
-              main.py \
-              services \
-              tests
+            python -m compileall -q main.py services
+
+            if [ -d tests ]; then
+              python -m compileall -q tests
+            fi
 
             echo "Python syntax validation successful."
 
@@ -196,8 +200,7 @@ jobs:
             echo "ANDROID_HOME=${ANDROID_HOME:-}"
             echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
 
-            if command -v sdkmanager >/dev/null 2>&1
-            then
+            if command -v sdkmanager >/dev/null 2>&1; then
               sdkmanager --version
             else
               echo "WARNING: sdkmanager is not in PATH"
@@ -205,7 +208,7 @@ jobs:
 
 
       # ============================================================
-      # 9. PRE-BUILD CHECK
+      # 9. FINAL PRE-BUILD CHECK
       # ============================================================
       - run:
           name: Final pre-build verification
@@ -265,8 +268,7 @@ jobs:
 
             echo "===== BIN DIRECTORY ====="
 
-            if [ ! -d bin ]
-            then
+            if [ ! -d bin ]; then
               echo "ERROR: bin directory does not exist"
               exit 1
             fi
@@ -278,8 +280,7 @@ jobs:
 
             APK_COUNT=$(find bin -type f -name "*.apk" | wc -l)
 
-            if [ "$APK_COUNT" -lt 1 ]
-            then
+            if [ "$APK_COUNT" -lt 1 ]; then
               echo "ERROR: No APK was generated"
               exit 1
             fi
