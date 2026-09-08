@@ -122,7 +122,7 @@ jobs:
       # 5. CREATE PYTHON BUILD ENVIRONMENT
       # ============================================================
       - run:
-          name: Install Buildozer Cython Pytest and NumPy
+          name: Install Buildozer Cython Pytest NumPy and Pillow
           command: |
             set -eux
 
@@ -149,6 +149,12 @@ jobs:
             python -m pip install \
               numpy
 
+            # ======================================================
+            # PILLOW FOR IMAGE SERVICE
+            # ======================================================
+            python -m pip install \
+              Pillow
+
             python -m pip install \
               git+https://github.com/kivy/buildozer.git
 
@@ -157,11 +163,16 @@ jobs:
             python -m pip show Cython
             python -m pip show pytest
             python -m pip show numpy
+            python -m pip show Pillow
             python -m pip show buildozer
 
             echo "===== VERIFY NUMPY ====="
 
             python -c "import numpy; print('NumPy version:', numpy.__version__)"
+
+            echo "===== VERIFY PILLOW ====="
+
+            python -c "from PIL import Image; print('Pillow is ready')"
 
             echo "===== VERSIONS ====="
 
@@ -208,6 +219,8 @@ jobs:
 
             source ~/buildozer-venv/bin/activate
 
+            export PYTHONPATH="$HOME/project:${PYTHONPATH:-}"
+
             python -m compileall -q \
               main.py \
               services \
@@ -216,13 +229,13 @@ jobs:
             echo "Python syntax validation successful."
 
 
-            # ============================================================
-      # RUN PYTHON TESTS
+      # ============================================================
+      # 8. RUN PYTHON TESTS
       # ============================================================
       - run:
           name: Run Python tests
           command: |
-            set -eo pipefail
+            set -eux
 
             echo "=========================================="
             echo " ENTERING PROJECT DIRECTORY"
@@ -258,6 +271,13 @@ jobs:
             echo "=========================================="
 
             python -c "import numpy; print('NumPy is ready:', numpy.__version__)"
+
+            echo ""
+            echo "=========================================="
+            echo " VERIFYING PILLOW BEFORE TESTS"
+            echo "=========================================="
+
+            python -c "from PIL import Image; print('Pillow is ready')"
 
             echo ""
             echo "=========================================="
@@ -298,12 +318,24 @@ jobs:
 
             echo ""
             echo "=========================================="
-            echo " VERIFYING SERVICES IMPORT"
+            echo " VERIFYING SERVICES PACKAGE"
             echo "=========================================="
 
             python -c "import services; print('Services package is ready')"
 
+            echo ""
+            echo "=========================================="
+            echo " VERIFYING IMAGE SERVICE IMPORT"
+            echo "=========================================="
+
             python -c "from services.image_service import ImageService; print('ImageService import is ready')"
+
+            echo ""
+            echo "=========================================="
+            echo " VERIFYING TEXT DECODER IMPORT"
+            echo "=========================================="
+
+            python -c "from services.text_decoder import TextDecoder; print('TextDecoder import is ready')"
 
             echo ""
             echo "=========================================="
@@ -311,6 +343,11 @@ jobs:
             echo "=========================================="
 
             python -m pytest -q
+
+            echo ""
+            echo "=========================================="
+            echo " ALL TESTS PASSED"
+            echo "=========================================="
 
 
       # ============================================================
@@ -687,6 +724,10 @@ jobs:
             source "$BASH_ENV"
             source ~/buildozer-venv/bin/activate
 
+            cd ~/project
+
+            export PYTHONPATH="$HOME/project:${PYTHONPATH:-}"
+
             echo "========================================"
             echo "FINAL PRE-BUILD VERIFICATION"
             echo "========================================"
@@ -696,6 +737,9 @@ jobs:
 
             echo "===== NUMPY ====="
             python -c "import numpy; print(numpy.__version__)"
+
+            echo "===== PILLOW ====="
+            python -c "from PIL import Image; print('Pillow is ready')"
 
             echo "===== CYTHON ====="
             cython --version
@@ -738,7 +782,7 @@ jobs:
 
             echo "===== FINAL PYTEST ====="
 
-            pytest -q
+            python -m pytest -q
 
             echo "========================================"
             echo "PRE-BUILD VALIDATION PASSED"
@@ -769,6 +813,10 @@ jobs:
 
             source "$BASH_ENV"
             source ~/buildozer-venv/bin/activate
+
+            cd ~/project
+
+            export PYTHONPATH="$HOME/project:${PYTHONPATH:-}"
 
             echo "========================================"
             echo "ACTIVE BUILD ENVIRONMENT"
@@ -802,6 +850,10 @@ jobs:
             echo "===== NUMPY ====="
 
             python -c "import numpy; print(numpy.__version__)"
+
+            echo "===== PILLOW ====="
+
+            python -c "from PIL import Image; print('Pillow is ready')"
 
             echo "===== CYTHON ====="
 
