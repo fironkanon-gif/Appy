@@ -86,7 +86,6 @@ jobs:
             echo "===== PYTHON ====="
             python3 --version
 
-
       # ============================================================
       # 4. CREATE PYTHON BUILD ENVIRONMENT
       # ============================================================
@@ -107,8 +106,10 @@ jobs:
               wheel
 
             python -m pip install \
-              "Cython==0.29.34" \
-              "buildozer==1.6.0"
+              "Cython==0.29.34"
+
+            python -m pip install \
+              git+https://github.com/kivy/buildozer.git
 
             echo "===== INSTALLED PACKAGES ====="
 
@@ -117,8 +118,6 @@ jobs:
 
             cython --version
             buildozer --version
-
-
       # ============================================================
       # 5. VALIDATE PROJECT FILES
       # ============================================================
