@@ -230,7 +230,7 @@ jobs:
             echo "export ANDROIDNDK=$NDK_ROOT" >> "$BASH_ENV"
 
             echo "export ANDROIDAPI=35" >> "$BASH_ENV"
-            echo "export NDKAPI=23" >> "$BASH_ENV"
+            echo "export NDKAPI=24" >> "$BASH_ENV"
 
             source "$BASH_ENV"
 
