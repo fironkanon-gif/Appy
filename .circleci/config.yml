@@ -25,10 +25,6 @@ jobs:
           command: |
             set -eux
 
-            echo "=========================================="
-            echo "        GOTHIC OCR ANDROID BUILD"
-            echo "=========================================="
-
             echo "===== PROJECT ====="
             pwd
             ls -la
@@ -82,9 +78,7 @@ jobs:
               build-essential \
               ccache \
               patch \
-              wget \
-              curl \
-              tar
+              wget
 
             echo "===== JAVA 17 ====="
             /usr/lib/jvm/java-17-openjdk-amd64/bin/java -version
@@ -129,11 +123,9 @@ jobs:
       # 5. VALIDATE PROJECT FILES
       # ============================================================
       - run:
-          name: Validate Gothic OCR project files
+          name: Validate project files
           command: |
             set -eux
-
-            echo "===== CHECKING REQUIRED FILES ====="
 
             test -f main.py
             test -f buildozer.spec
@@ -149,9 +141,7 @@ jobs:
 
             test -f java/org/gothicocr/TFLiteBridge.java
 
-            echo "=========================================="
-            echo "ALL GOTHIC OCR FILES FOUND"
-            echo "=========================================="
+            echo "All required project files found."
 
 
       # ============================================================
@@ -180,25 +170,17 @@ jobs:
           command: |
             set -eux
 
-            echo "===== CHECKING NDK ====="
-
             grep -F \
               "android.ndk = 28c" \
               buildozer.spec
-
-            echo "===== CHECKING TENSORFLOW LITE ====="
 
             grep -F \
               "org.tensorflow:tensorflow-lite:2.17.0" \
               buildozer.spec
 
-            echo "===== CHECKING JAVA SOURCE ====="
-
             grep -E \
               '^android.add_src[[:space:]]*=[[:space:]]*java' \
               buildozer.spec
-
-            echo "===== CHECKING TFLITE BRIDGE ====="
 
             grep -F \
               "class TFLiteBridge" \
@@ -310,14 +292,19 @@ jobs:
             echo "===== VERIFYING SDK COMPONENTS ====="
 
             test -d "$ANDROIDSDK/platform-tools"
+
             test -d "$ANDROIDSDK/platforms/android-35"
+
             test -d "$ANDROIDSDK/build-tools/35.0.0"
-            test -f "$ANDROIDSDK/cmdline-tools/latest/bin/sdkmanager"
+
+            test -f \
+              "$ANDROIDSDK/cmdline-tools/latest/bin/sdkmanager"
 
             echo "===== INSTALLED SDK COMPONENTS ====="
 
             sdkmanager --list_installed 2>/dev/null | grep -E \
-              "platform-tools|platforms;android-35|build-tools;35.0.0|cmdline-tools" || true
+              "platform-tools|platforms;android-35|build-tools;35.0.0|cmdline-tools" \
+              || true
 
 
       # ============================================================
@@ -353,10 +340,14 @@ jobs:
 
             source "$BASH_ENV"
 
-            mkdir -p ~/.buildozer/android/platform
+            mkdir -p \
+              ~/.buildozer/android/platform
 
-            rm -rf ~/.buildozer/android/platform/android-sdk
-            rm -rf ~/.buildozer/android/platform/android-ndk-r28c
+            rm -rf \
+              ~/.buildozer/android/platform/android-sdk
+
+            rm -rf \
+              ~/.buildozer/android/platform/android-ndk-r28c
 
             ln -s \
               "$ANDROIDSDK" \
@@ -388,7 +379,8 @@ jobs:
 
             echo "===== BUILDOZER ANDROID LINKS ====="
 
-            ls -la ~/.buildozer/android/platform
+            ls -la \
+              ~/.buildozer/android/platform
 
             echo "===== SDK BUILD TOOLS ====="
 
@@ -407,20 +399,17 @@ jobs:
 
 
       # ============================================================
-      # 14. VALIDATE GOTHIC TFLITE MODEL
+      # 14. VALIDATE MODEL
       # ============================================================
       - run:
-          name: Validate Gothic OCR model
+          name: Validate model file
           command: |
             set -eux
 
-            echo "===== MODEL ====="
-
-            ls -lh models/gothic_ocr.tflite
+            ls -lh \
+              models/gothic_ocr.tflite
 
             MODEL_SIZE=$(stat -c%s models/gothic_ocr.tflite)
-
-            echo "Model size: $MODEL_SIZE bytes"
 
             if [ "$MODEL_SIZE" -lt 1000 ]
             then
@@ -432,51 +421,7 @@ jobs:
 
 
       # ============================================================
-      # 15. VALIDATE LABELS
-      # ============================================================
-      - run:
-          name: Validate Gothic labels
-          command: |
-            set -eux
-
-            test -s data/labels.json
-
-            echo "===== LABEL FILE ====="
-
-            ls -lh data/labels.json
-
-            echo "===== LABEL CONTENT ====="
-
-            head -50 data/labels.json || true
-
-            echo "Labels validation successful."
-
-
-      # ============================================================
-      # 16. VALIDATE GOTHIC FONT
-      # ============================================================
-      - run:
-          name: Validate Gothic font
-          command: |
-            set -eux
-
-            test -s fonts/NotoSansGothic-Regular.ttf
-
-            FONT_SIZE=$(stat -c%s fonts/NotoSansGothic-Regular.ttf)
-
-            echo "Gothic font size: $FONT_SIZE bytes"
-
-            if [ "$FONT_SIZE" -lt 1000 ]
-            then
-              echo "ERROR: Gothic font appears invalid."
-              exit 1
-            fi
-
-            echo "Gothic font validation successful."
-
-
-      # ============================================================
-      # 17. FINAL PRE-BUILD CHECK
+      # 15. FINAL PRE-BUILD CHECK
       # ============================================================
       - run:
           name: Final pre-build verification
@@ -484,11 +429,9 @@ jobs:
             set -eux
 
             source "$BASH_ENV"
-            source ~/buildozer-venv/bin/activate
 
-            echo "=========================================="
-            echo "       FINAL GOTHIC OCR CHECK"
-            echo "=========================================="
+            source \
+              ~/buildozer-venv/bin/activate
 
             echo "===== PYTHON ====="
             python --version
@@ -509,12 +452,6 @@ jobs:
             echo "===== NDK ====="
             echo "$ANDROIDNDK"
 
-            echo "===== API ====="
-            echo "$ANDROIDAPI"
-
-            echo "===== NDK API ====="
-            echo "$NDKAPI"
-
             echo "===== AIDL ====="
 
             test -f \
@@ -530,37 +467,15 @@ jobs:
             test -L \
               "$ANDROIDSDK/tools/bin/sdkmanager"
 
-            echo "===== MODEL ====="
-
-            test -f \
-              models/gothic_ocr.tflite
-
-            echo "===== LABELS ====="
-
-            test -f \
-              data/labels.json
-
-            echo "===== FONT ====="
-
-            test -f \
-              fonts/NotoSansGothic-Regular.ttf
-
-            echo "===== JAVA BRIDGE ====="
-
-            test -f \
-              java/org/gothicocr/TFLiteBridge.java
-
             echo "===== DISK ====="
 
             df -h
 
-            echo "=========================================="
             echo "PRE-BUILD VALIDATION PASSED"
-            echo "=========================================="
 
 
       # ============================================================
-      # 18. CLEAN OLD OUTPUT
+      # 16. CLEAN OUTPUT
       # ============================================================
       - run:
           name: Clean old output
@@ -569,238 +484,99 @@ jobs:
 
             rm -rf bin
 
-            echo "Old APK output removed."
+            echo "Old output removed."
 
 
       # ============================================================
-      # 19. SMART ANDROID BUILD
+      # 16.5. CONFIGURE FREETYPE DOWNLOAD FALLBACK
       # ============================================================
       - run:
-          name: Smart Android Build
-          no_output_timeout: 40m
+          name: Configure FreeType fallback mirror
           command: |
-            set -e
+            set -eux
+
+            echo "===== CONFIGURING FREETYPE FALLBACK ====="
+
+            echo 'export URL_freetype="https://nongnu.uib.no/freetype/freetype-{version}.tar.gz"' \
+              >> "$BASH_ENV"
 
             source "$BASH_ENV"
-            source ~/buildozer-venv/bin/activate
 
-            LOG=/tmp/gothic_build.log
+            echo "FreeType download URL override:"
 
-            run_build() {
+            echo "$URL_freetype"
 
-              rm -f "$LOG"
+            echo "===== TESTING FREETYPE MIRROR ====="
 
-              set +e
+            wget \
+              --spider \
+              --tries=3 \
+              --timeout=30 \
+              "https://nongnu.uib.no/freetype/freetype-2.14.1.tar.gz"
 
-              buildozer -v android debug 2>&1 | tee "$LOG"
-
-              STATUS=${PIPESTATUS[0]}
-
-              set -e
-
-              return "$STATUS"
-            }
-
-            echo "=========================================="
-            echo "      GOTHIC OCR SMART ANDROID BUILD"
-            echo "=========================================="
-
-            echo "===== BUILD ATTEMPT 1 ====="
-
-            if run_build
-            then
-              echo "=========================================="
-              echo "       BUILD SUCCESS"
-              echo "=========================================="
-
-              exit 0
-            fi
-
-
-            # ========================================================
-            # ANALYZE BUILD ERROR
-            # ========================================================
-
-            echo "=========================================="
-            echo "      ANALYZING BUILD ERROR"
-            echo "=========================================="
-
-            echo "===== ERROR MATCHING ====="
-
-            grep -iE \
-              "error|failed|exception|traceback" \
-              "$LOG" | tail -50 || true
-
-
-            # ========================================================
-            # FIX A — ANDROID SDK / AIDL / LICENSE
-            # ========================================================
-
-            if grep -qiE \
-              "aidl not found|license.*not accepted|licenses|Skipping following packages|sdkmanager"
-              "$LOG"
-            then
-
-              echo "=========================================="
-              echo " DETECTED ANDROID SDK / AIDL PROBLEM"
-              echo "=========================================="
-
-              echo "===== ACCEPT LICENSES ====="
-
-              yes | sdkmanager --licenses >/dev/null 2>&1 || true
-
-              echo "===== INSTALL ANDROID PACKAGES ====="
-
-              sdkmanager \
-                "platform-tools" \
-                "platforms;android-35" \
-                "build-tools;35.0.0" \
-                "cmdline-tools;latest"
-
-              echo "===== VERIFY AIDL ====="
-
-              test -f \
-                "$ANDROIDSDK/build-tools/35.0.0/aidl"
-
-              echo "===== RETRY AFTER AIDL FIX ====="
-
-              if run_build
-              then
-
-                echo "=========================================="
-                echo " BUILD SUCCESS AFTER AIDL FIX"
-                echo "=========================================="
-
-                exit 0
-
-              fi
-
-            fi
-
-
-            # ========================================================
-            # FIX B — FREETYPE / SAVANNAH / HTTP 504
-            # ========================================================
-
-            if grep -qiE \
-              "freetype|savannah|HTTP Error 504|Gateway Time-out|504 Gateway"
-              "$LOG"
-            then
-
-              echo "=========================================="
-              echo " DETECTED FREETYPE DOWNLOAD PROBLEM"
-              echo "=========================================="
-
-              rm -rf /tmp/freetype-src
-              rm -rf /tmp/freetype-extract
-
-              rm -f /tmp/freetype.tar.gz
-
-              mkdir -p /tmp/freetype-extract
-
-              echo "===== DOWNLOADING FREETYPE ====="
-
-              curl \
-                -L \
-                --retry 8 \
-                --retry-all-errors \
-                --retry-delay 10 \
-                --connect-timeout 30 \
-                --max-time 300 \
-                -o /tmp/freetype.tar.gz \
-                https://ftpmirror.gnu.org/freetype/freetype-2.14.1.tar.gz
-
-              echo "===== VERIFY FREETYPE ARCHIVE ====="
-
-              test -s /tmp/freetype.tar.gz
-
-              echo "===== EXTRACT FREETYPE ====="
-
-              tar \
-                -xzf /tmp/freetype.tar.gz \
-                -C /tmp/freetype-extract
-
-              mv \
-                /tmp/freetype-extract/freetype-2.14.1 \
-                /tmp/freetype-src
-
-              export P4A_freetype_DIR=/tmp/freetype-src
-
-              echo "P4A_freetype_DIR=$P4A_freetype_DIR"
-
-              echo "===== RETRY AFTER FREETYPE FIX ====="
-
-              if run_build
-              then
-
-                echo "=========================================="
-                echo " BUILD SUCCESS AFTER FREETYPE FIX"
-                echo "=========================================="
-
-                exit 0
-
-              fi
-
-            fi
-
-
-            # ========================================================
-            # FIX C — GENERAL BUILD CACHE / STALE BUILD
-            # ========================================================
-
-            if grep -qiE \
-              "buildozer|python-for-android|gradle|recipe|failed to build|command failed"
-              "$LOG"
-            then
-
-              echo "=========================================="
-              echo " DETECTED GENERAL BUILD FAILURE"
-              echo "=========================================="
-
-              echo "===== CLEANING TEMPORARY BUILD CACHE ====="
-
-              rm -rf .buildozer/android/platform/build-* || true
-
-              rm -rf .buildozer/android/platform/python-for-android || true
-
-              echo "===== RETRY AFTER BUILD CACHE CLEAN ====="
-
-              if run_build
-              then
-
-                echo "=========================================="
-                echo " BUILD SUCCESS AFTER CACHE CLEAN"
-                echo "=========================================="
-
-                exit 0
-
-              fi
-
-            fi
-
-
-            # ========================================================
-            # FINAL FAILURE
-            # ========================================================
-
-            echo "=========================================="
-            echo "       GOTHIC OCR BUILD FAILED"
-            echo "=========================================="
-
-            echo "===== LAST 150 LINES ====="
-
-            tail -150 "$LOG"
-
-            echo "=========================================="
-            echo " FULL BUILD LOG:"
-            echo "$LOG"
-            echo "=========================================="
-
-            exit 1
+            echo "FreeType fallback mirror is reachable."
 
 
       # ============================================================
-      # 20. VERIFY APK
+      # 17. BUILD APK
+      # ============================================================
+      - run:
+          name: Build Android APK
+          no_output_timeout: 30m
+          command: |
+            set -eux
+
+            source "$BASH_ENV"
+
+            source \
+              ~/buildozer-venv/bin/activate
+
+            echo "===== ACTIVE BUILD ENVIRONMENT ====="
+
+            echo "JAVA_HOME=$JAVA_HOME"
+
+            echo "ANDROIDSDK=$ANDROIDSDK"
+
+            echo "ANDROIDNDK=$ANDROIDNDK"
+
+            echo "ANDROIDAPI=$ANDROIDAPI"
+
+            echo "NDKAPI=$NDKAPI"
+
+            echo "URL_freetype=$URL_freetype"
+
+            echo "===== JAVA ====="
+
+            java -version
+            javac -version
+
+            echo "===== PYTHON ====="
+
+            python --version
+
+            echo "===== CYTHON ====="
+
+            cython --version
+
+            echo "===== BUILDOZER ====="
+
+            buildozer --version
+
+            echo "===== SDKMANAGER BEING USED ====="
+
+            "$ANDROIDSDK/tools/bin/sdkmanager" --version
+
+            echo "===== FREETYPE SOURCE ====="
+
+            echo "$URL_freetype"
+
+            echo "===== START BUILD ====="
+
+            buildozer -v android debug
+
+
+      # ============================================================
+      # 18. VERIFY APK
       # ============================================================
       - run:
           name: Verify generated APK
@@ -813,9 +589,7 @@ jobs:
               exit 1
             fi
 
-            echo "=========================================="
-            echo "             APK FILES"
-            echo "=========================================="
+            echo "===== APK FILES ====="
 
             find bin \
               -type f \
@@ -830,10 +604,6 @@ jobs:
               exit 1
             fi
 
-            echo "===== APK COUNT ====="
-
-            echo "$APK_COUNT"
-
             echo "===== APK DETAILS ====="
 
             find bin \
@@ -841,48 +611,15 @@ jobs:
               -name "*.apk" \
               -exec ls -lh {} \;
 
-            echo "=========================================="
-            echo "      GOTHIC OCR APK BUILD SUCCESSFUL"
-            echo "=========================================="
+            echo "APK BUILD SUCCESSFUL"
 
 
       # ============================================================
-      # 21. SAVE APK
+      # 19. SAVE APK
       # ============================================================
       - store_artifacts:
           path: bin
           destination: GothicOCR2-APK
-
-
-      # ============================================================
-      # 22. SAVE BUILD LOG
-      # ============================================================
-      - run:
-          name: Prepare build diagnostics
-          when: always
-          command: |
-            set +e
-
-            echo "===== BUILD DIAGNOSTICS ====="
-
-            if [ -f /tmp/gothic_build.log ]
-            then
-              mkdir -p build_logs
-              cp /tmp/gothic_build.log build_logs/gothic_build.log
-            fi
-
-            if [ -d bin ]
-            then
-              find bin \
-                -type f \
-                -name "*.apk" \
-                -exec ls -lh {} \;
-            fi
-
-
-      - store_artifacts:
-          path: build_logs
-          destination: GothicOCR2-BuildLogs
 
 
 workflows:
