@@ -1,7 +1,7 @@
 # ============================================================
 # GOTHIC OCR — IMAGE SERVICE TESTS
 # ============================================================
-
+from pathlib import Path
 import numpy as np
 import pytest
 
