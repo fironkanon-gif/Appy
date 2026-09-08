@@ -30,13 +30,26 @@ class GothicOCR:
     """
 
     INPUT_SIZE = 1024
-    EXPECTED_INPUT_SHAPE = (1, 1024, 1024, 3)
-    EXPECTED_OUTPUT_SHAPE = (1, 29, 21504)
+
+    EXPECTED_INPUT_SHAPE = (
+        1,
+        1024,
+        1024,
+        3,
+    )
+
+    EXPECTED_OUTPUT_SHAPE = (
+        1,
+        29,
+        21504,
+    )
 
     TILE_OVERLAP = 0.15
 
     # Changing this invalidates previous OCR cache entries.
-    CACHE_VERSION = "gothicocr-v2-tile1024-overlap15"
+    CACHE_VERSION = (
+        "gothicocr-v2-tile1024-overlap15"
+    )
 
     def __init__(
         self,
@@ -48,29 +61,41 @@ class GothicOCR:
         self._lock = threading.RLock()
         self._closed = False
 
-        base_dir = Path(__file__).resolve().parent.parent
+        base_dir = (
+            Path(__file__).resolve().parent.parent
+        )
 
         if model_path is None:
-            model_path = base_dir / "models" / "gothic_ocr.tflite"
+            model_path = (
+                base_dir
+                / "models"
+                / "gothic_ocr.tflite"
+            )
 
         if labels_path is None:
-            labels_path = base_dir / "data" / "labels.json"
+            labels_path = (
+                base_dir
+                / "data"
+                / "labels.json"
+            )
 
         self.model_path = Path(model_path)
         self.labels_path = Path(labels_path)
 
-        if not self.model_path.exists():
+        if not self.model_path.is_file():
             raise FileNotFoundError(
-                f"TFLite model not found: {self.model_path}"
+                f"TFLite model not found: "
+                f"{self.model_path}"
             )
 
-        if not self.labels_path.exists():
+        if not self.labels_path.is_file():
             raise FileNotFoundError(
-                f"Labels file not found: {self.labels_path}"
+                f"Labels file not found: "
+                f"{self.labels_path}"
             )
 
         # --------------------------------------------------------
-        # Image + decoder services
+        # IMAGE + DECODER SERVICES
         # --------------------------------------------------------
 
         self.image_service = ImageService()
@@ -80,10 +105,12 @@ class GothicOCR:
         )
 
         # --------------------------------------------------------
-        # Cache
+        # CACHE
         # --------------------------------------------------------
 
-        self.cache_enabled = bool(cache_enabled)
+        self.cache_enabled = bool(
+            cache_enabled
+        )
 
         if self.cache_enabled:
             self.cache = OCRCache(
@@ -94,7 +121,7 @@ class GothicOCR:
             self.cache = None
 
         # --------------------------------------------------------
-        # TFLite interpreter
+        # TFLITE INTERPRETER
         # --------------------------------------------------------
 
         self.interpreter = None
@@ -103,7 +130,7 @@ class GothicOCR:
         self._load_interpreter()
 
     # ============================================================
-    # INTERPRETER
+    # INTERPRETER LOADING
     # ============================================================
 
     def _load_interpreter(self):
@@ -118,8 +145,10 @@ class GothicOCR:
         """
 
         # --------------------------------------------------------
-        # Android / PyJNIus
+        # TRY ANDROID / PYJNIUS
         # --------------------------------------------------------
+
+        android_available = False
 
         try:
             from jnius import autoclass
@@ -128,11 +157,7 @@ class GothicOCR:
                 "org.tensorflow.lite.Interpreter"
             )
 
-            FileInputStream = autoclass(
-                "java.io.FileInputStream"
-            )
-
-            FileChannelMapMode = autoclass(
+            FileMapMode = autoclass(
                 "java.nio.channels.FileChannel$MapMode"
             )
 
@@ -140,71 +165,117 @@ class GothicOCR:
                 "java.io.RandomAccessFile"
             )
 
-            model_file = RandomAccessFile(
-                str(self.model_path),
-                "r",
-            )
-
-            channel = model_file.getChannel()
-
-            mapped_buffer = channel.map(
-                FileChannelMapMode.READ_ONLY,
-                0,
-                self.model_path.stat().st_size,
-            )
-
-            self.interpreter = Interpreter(
-                mapped_buffer
-            )
-
-            self._android_interpreter = True
-
-            model_file.close()
-
-            self._validate_android_interpreter()
-
-            return
+            android_available = True
 
         except Exception:
-            self.interpreter = None
-            self._android_interpreter = False
+            android_available = False
+
+        if android_available:
+
+            model_file = None
+
+            try:
+                model_file = RandomAccessFile(
+                    str(self.model_path),
+                    "r",
+                )
+
+                channel = model_file.getChannel()
+
+                mapped_buffer = channel.map(
+                    FileMapMode.READ_ONLY,
+                    0,
+                    self.model_path.stat().st_size,
+                )
+
+                self.interpreter = Interpreter(
+                    mapped_buffer
+                )
+
+                self._android_interpreter = True
+
+                self._validate_android_interpreter()
+
+                return
+
+            except Exception as exc:
+
+                if self.interpreter is not None:
+                    try:
+                        self.interpreter.close()
+                    except Exception:
+                        pass
+
+                self.interpreter = None
+                self._android_interpreter = False
+
+                raise RuntimeError(
+                    "Android TensorFlow Lite "
+                    "interpreter failed to load or "
+                    "validate the model: "
+                    f"{exc}"
+                ) from exc
+
+            finally:
+
+                if model_file is not None:
+                    try:
+                        model_file.close()
+                    except Exception:
+                        pass
 
         # --------------------------------------------------------
-        # Desktop fallback
+        # DESKTOP FALLBACK
         # --------------------------------------------------------
 
         try:
             import tensorflow as tf
 
-            self.interpreter = tf.lite.Interpreter(
-                model_path=str(self.model_path)
+        except ImportError as exc:
+            raise RuntimeError(
+                "TensorFlow Lite interpreter could "
+                "not be loaded. On Android, make "
+                "sure TensorFlow Lite and PyJNIus "
+                "are available."
+            ) from exc
+
+        try:
+            self.interpreter = (
+                tf.lite.Interpreter(
+                    model_path=str(
+                        self.model_path
+                    )
+                )
             )
 
             self.interpreter.allocate_tensors()
 
+            self._android_interpreter = False
+
             self._validate_desktop_interpreter()
 
-        except ImportError as exc:
-            raise RuntimeError(
-                "TensorFlow Lite interpreter could not be loaded. "
-                "On Android, make sure TensorFlow Lite and PyJNIus "
-                "are available."
-            ) from exc
-
         except Exception as exc:
+
+            self.interpreter = None
+
             raise RuntimeError(
                 f"Failed to load TFLite model: {exc}"
             ) from exc
 
     # ============================================================
-    # VALIDATION
+    # ANDROID VALIDATION
     # ============================================================
 
     def _validate_android_interpreter(self):
         """Validate Android TFLite tensors."""
 
-        input_tensor = self.interpreter.getInputTensor(0)
-        output_tensor = self.interpreter.getOutputTensor(0)
+        input_tensor = (
+            self.interpreter.getInputTensor(0)
+        )
+
+        output_tensor = (
+            self.interpreter.getOutputTensor(0)
+        )
 
         input_shape = tuple(
             int(x)
@@ -218,29 +289,68 @@ class GothicOCR:
 
         if input_shape != self.EXPECTED_INPUT_SHAPE:
             raise RuntimeError(
-                f"Unexpected model input shape: "
+                "Unexpected model input shape: "
                 f"{input_shape}. "
-                f"Expected {self.EXPECTED_INPUT_SHAPE}."
+                "Expected "
+                f"{self.EXPECTED_INPUT_SHAPE}."
             )
 
         if output_shape != self.EXPECTED_OUTPUT_SHAPE:
             raise RuntimeError(
-                f"Unexpected model output shape: "
+                "Unexpected model output shape: "
                 f"{output_shape}. "
-                f"Expected {self.EXPECTED_OUTPUT_SHAPE}."
+                "Expected "
+                f"{self.EXPECTED_OUTPUT_SHAPE}."
             )
+
+        input_dtype = str(
+            input_tensor.dataType()
+        )
+
+        output_dtype = str(
+            output_tensor.dataType()
+        )
+
+        if "FLOAT32" not in input_dtype:
+            raise RuntimeError(
+                "Unexpected model input dtype: "
+                f"{input_dtype}. "
+                "Expected FLOAT32."
+            )
+
+        if "FLOAT32" not in output_dtype:
+            raise RuntimeError(
+                "Unexpected model output dtype: "
+                f"{output_dtype}. "
+                "Expected FLOAT32."
+            )
+
+    # ============================================================
+    # DESKTOP VALIDATION
+    # ============================================================
 
     def _validate_desktop_interpreter(self):
         """Validate desktop TFLite tensors."""
 
-        inputs = self.interpreter.get_input_details()
-        outputs = self.interpreter.get_output_details()
+        inputs = (
+            self.interpreter
+            .get_input_details()
+        )
+
+        outputs = (
+            self.interpreter
+            .get_output_details()
+        )
 
         if not inputs:
-            raise RuntimeError("Model has no input tensor.")
+            raise RuntimeError(
+                "Model has no input tensor."
+            )
 
         if not outputs:
-            raise RuntimeError("Model has no output tensor.")
+            raise RuntimeError(
+                "Model has no output tensor."
+            )
 
         input_shape = tuple(
             int(x)
@@ -254,47 +364,54 @@ class GothicOCR:
 
         if input_shape != self.EXPECTED_INPUT_SHAPE:
             raise RuntimeError(
-                f"Unexpected model input shape: "
+                "Unexpected model input shape: "
                 f"{input_shape}. "
-                f"Expected {self.EXPECTED_INPUT_SHAPE}."
+                "Expected "
+                f"{self.EXPECTED_INPUT_SHAPE}."
             )
 
         if output_shape != self.EXPECTED_OUTPUT_SHAPE:
             raise RuntimeError(
-                f"Unexpected model output shape: "
+                "Unexpected model output shape: "
                 f"{output_shape}. "
-                f"Expected {self.EXPECTED_OUTPUT_SHAPE}."
+                "Expected "
+                f"{self.EXPECTED_OUTPUT_SHAPE}."
+            )
+
+        input_dtype = str(
+            inputs[0]["dtype"]
+        )
+
+        output_dtype = str(
+            outputs[0]["dtype"]
+        )
+
+        if "float32" not in input_dtype:
+            raise RuntimeError(
+                "Unexpected model input dtype: "
+                f"{input_dtype}. "
+                "Expected float32."
+            )
+
+        if "float32" not in output_dtype:
+            raise RuntimeError(
+                "Unexpected model output dtype: "
+                f"{output_dtype}. "
+                "Expected float32."
             )
 
     # ============================================================
-    # SINGLE TENSOR INFERENCE
+    # ANDROID INFERENCE
     # ============================================================
 
     def _run_single_android(self, tensor):
         """
         Run one 1024x1024 tensor on Android.
+
+        Uses Java DirectByteBuffer and transfers
+        the output through a Java-compatible byte
+        array before converting it to NumPy.
         """
-
-        input_tensor = self.interpreter.getInputTensor(0)
-        output_tensor = self.interpreter.getOutputTensor(0)
-
-        input_dtype = str(
-            input_tensor.dataType()
-        )
-
-        output_dtype = str(
-            output_tensor.dataType()
-        )
-
-        if "FLOAT32" not in input_dtype:
-            raise RuntimeError(
-                f"Expected FLOAT32 input, got {input_dtype}"
-            )
-
-        if "FLOAT32" not in output_dtype:
-            raise RuntimeError(
-                f"Expected FLOAT32 output, got {output_dtype}"
-            )
 
         input_array = np.asarray(
             tensor,
@@ -302,15 +419,20 @@ class GothicOCR:
             order="C",
         )
 
-        output_array = np.empty(
-            self.EXPECTED_OUTPUT_SHAPE,
-            dtype=np.float32,
-            order="C",
-        )
+        if tuple(input_array.shape) != (
+            self.EXPECTED_INPUT_SHAPE
+        ):
+            raise RuntimeError(
+                "Invalid input tensor shape: "
+                f"{input_array.shape}. "
+                "Expected "
+                f"{self.EXPECTED_INPUT_SHAPE}."
+            )
 
-        # --------------------------------------------------------
-        # Direct ByteBuffer
-        # --------------------------------------------------------
+        input_array = np.ascontiguousarray(
+            input_array,
+            dtype=np.float32,
+        )
 
         from jnius import autoclass
 
@@ -322,8 +444,14 @@ class GothicOCR:
             "java.nio.ByteOrder"
         )
 
-        input_buffer = ByteBuffer.allocateDirect(
-            input_array.nbytes
+        # --------------------------------------------------------
+        # INPUT BUFFER
+        # --------------------------------------------------------
+
+        input_buffer = (
+            ByteBuffer.allocateDirect(
+                input_array.nbytes
+            )
         )
 
         input_buffer.order(
@@ -336,13 +464,30 @@ class GothicOCR:
 
         input_buffer.rewind()
 
-        output_buffer = ByteBuffer.allocateDirect(
-            output_array.nbytes
+        # --------------------------------------------------------
+        # OUTPUT BUFFER
+        # --------------------------------------------------------
+
+        output_size = int(
+            np.prod(
+                self.EXPECTED_OUTPUT_SHAPE
+            )
+            * np.dtype(np.float32).itemsize
+        )
+
+        output_buffer = (
+            ByteBuffer.allocateDirect(
+                output_size
+            )
         )
 
         output_buffer.order(
             ByteOrder.nativeOrder()
         )
+
+        # --------------------------------------------------------
+        # RUN MODEL
+        # --------------------------------------------------------
 
         self.interpreter.run(
             input_buffer,
@@ -351,19 +496,52 @@ class GothicOCR:
 
         output_buffer.rewind()
 
+        # --------------------------------------------------------
+        # READ JAVA BYTE BUFFER
+        # --------------------------------------------------------
+
+        raw_output = bytearray(
+            output_size
+        )
+
         output_buffer.get(
-            output_array
+            raw_output
+        )
+
+        # --------------------------------------------------------
+        # CONVERT BYTES → FLOAT32
+        # --------------------------------------------------------
+
+        output_array = np.frombuffer(
+            raw_output,
+            dtype=np.float32,
+        ).copy()
+
+        output_array = output_array.reshape(
+            self.EXPECTED_OUTPUT_SHAPE
         )
 
         return output_array
 
+    # ============================================================
+    # DESKTOP INFERENCE
+    # ============================================================
+
     def _run_single_desktop(self, tensor):
         """
-        Run one 1024x1024 tensor on desktop TensorFlow Lite.
+        Run one 1024x1024 tensor on desktop
+        TensorFlow Lite.
         """
 
-        inputs = self.interpreter.get_input_details()
-        outputs = self.interpreter.get_output_details()
+        inputs = (
+            self.interpreter
+            .get_input_details()
+        )
+
+        outputs = (
+            self.interpreter
+            .get_output_details()
+        )
 
         input_index = inputs[0]["index"]
         output_index = outputs[0]["index"]
@@ -373,6 +551,21 @@ class GothicOCR:
             dtype=np.float32,
         )
 
+        input_array = np.ascontiguousarray(
+            input_array,
+            dtype=np.float32,
+        )
+
+        if tuple(input_array.shape) != (
+            self.EXPECTED_INPUT_SHAPE
+        ):
+            raise RuntimeError(
+                "Invalid input tensor shape: "
+                f"{input_array.shape}. "
+                "Expected "
+                f"{self.EXPECTED_INPUT_SHAPE}."
+            )
+
         self.interpreter.set_tensor(
             input_index,
             input_array,
@@ -380,25 +573,47 @@ class GothicOCR:
 
         self.interpreter.invoke()
 
-        output = self.interpreter.get_tensor(
-            output_index
+        output = (
+            self.interpreter.get_tensor(
+                output_index
+            )
         )
 
-        return np.asarray(
+        output = np.asarray(
             output,
             dtype=np.float32,
         )
+
+        if tuple(output.shape) != (
+            self.EXPECTED_OUTPUT_SHAPE
+        ):
+            raise RuntimeError(
+                "Invalid model output shape: "
+                f"{output.shape}. "
+                "Expected "
+                f"{self.EXPECTED_OUTPUT_SHAPE}."
+            )
+
+        return output
+
+    # ============================================================
+    # SINGLE INFERENCE
+    # ============================================================
 
     def _run_single(self, tensor):
         """Run one model inference."""
 
         if self._android_interpreter:
-            return self._run_single_android(tensor)
+            return self._run_single_android(
+                tensor
+            )
 
-        return self._run_single_desktop(tensor)
+        return self._run_single_desktop(
+            tensor
+        )
 
     # ============================================================
-    # CACHE HELPERS
+    # CACHE GET
     # ============================================================
 
     def _cache_get(self, image_path):
@@ -408,7 +623,10 @@ class GothicOCR:
         Cache errors must never break OCR.
         """
 
-        if not self.cache_enabled or self.cache is None:
+        if (
+            not self.cache_enabled
+            or self.cache is None
+        ):
             return None
 
         try:
@@ -419,7 +637,9 @@ class GothicOCR:
             if cached is None:
                 return None
 
-            result = copy.deepcopy(cached)
+            result = copy.deepcopy(
+                cached
+            )
 
             result["cache_hit"] = True
 
@@ -428,19 +648,27 @@ class GothicOCR:
         except Exception:
             return None
 
+    # ============================================================
+    # CACHE SET
+    # ============================================================
+
     def _cache_set(self, image_path, result):
         """
         Safely save OCR result.
 
-        Failure to write cache must never
-        make a successful OCR request fail.
+        Cache errors must never break OCR.
         """
 
-        if not self.cache_enabled or self.cache is None:
+        if (
+            not self.cache_enabled
+            or self.cache is None
+        ):
             return
 
         try:
-            cache_result = copy.deepcopy(result)
+            cache_result = copy.deepcopy(
+                result
+            )
 
             cache_result.pop(
                 "cache_hit",
@@ -468,21 +696,7 @@ class GothicOCR:
         """
         Analyze an image.
 
-        Parameters
-        ----------
-        image_path:
-            Path to image.
-
-        progress_callback:
-            Optional callback:
-                callback(current, total)
-
-        use_cache:
-            Whether cached results may be used.
-
-        Returns
-        -------
-        dict:
+        Returns:
             {
                 "text": str,
                 "detections": list,
@@ -498,11 +712,14 @@ class GothicOCR:
                     "GothicOCR service is closed."
                 )
 
-            image_path = Path(image_path)
+            image_path = Path(
+                image_path
+            )
 
-            if not image_path.exists():
+            if not image_path.is_file():
                 raise FileNotFoundError(
-                    f"Image not found: {image_path}"
+                    f"Image not found: "
+                    f"{image_path}"
                 )
 
             # ----------------------------------------------------
@@ -510,6 +727,7 @@ class GothicOCR:
             # ----------------------------------------------------
 
             if use_cache:
+
                 cached = self._cache_get(
                     image_path
                 )
@@ -518,18 +736,23 @@ class GothicOCR:
 
                     if progress_callback:
                         try:
-                            progress_callback(1, 1)
+                            progress_callback(
+                                1,
+                                1,
+                            )
                         except Exception:
                             pass
 
                     return cached
 
             # ----------------------------------------------------
-            # Load image
+            # LOAD IMAGE
             # ----------------------------------------------------
 
-            image = self.image_service.load_rgb(
-                image_path
+            image = (
+                self.image_service.load_rgb(
+                    image_path
+                )
             )
 
             original_height, original_width = (
@@ -537,27 +760,34 @@ class GothicOCR:
             )
 
             # ----------------------------------------------------
-            # Generate tiles
+            # GENERATE TILES
             # ----------------------------------------------------
 
-            tiles = self.image_service.iter_tiles(
-                image,
-                overlap=self.TILE_OVERLAP,
-                tile_size=self.INPUT_SIZE,
+            tiles = list(
+                self.image_service.iter_tiles(
+                    image,
+                    overlap=self.TILE_OVERLAP,
+                    tile_size=self.INPUT_SIZE,
+                )
             )
 
-            # Since iter_tiles is a generator, convert only
-            # its metadata references into a list so we know
-            # the progress total.
-            tiles = list(tiles)
-
-            total_tiles = len(tiles)
+            total_tiles = len(
+                tiles
+            )
 
             if total_tiles == 0:
+
                 result = {
                     "text": "",
                     "detections": [],
                     "lines": [],
+                    "image_width": int(
+                        original_width
+                    ),
+                    "image_height": int(
+                        original_height
+                    ),
+                    "tiles_processed": 0,
                     "cache_hit": False,
                 }
 
@@ -574,35 +804,48 @@ class GothicOCR:
             # TILE INFERENCE
             # ----------------------------------------------------
 
-            for index, tile in enumerate(tiles, start=1):
+            for index, tile in enumerate(
+                tiles,
+                start=1,
+            ):
 
                 tensor = tile["input"]
 
                 meta = tile["meta"]
 
                 offset_x = float(
-                    tile.get("offset_x", 0)
+                    tile.get(
+                        "offset_x",
+                        0,
+                    )
                 )
 
                 offset_y = float(
-                    tile.get("offset_y", 0)
+                    tile.get(
+                        "offset_y",
+                        0,
+                    )
                 )
 
                 # ----------------------------------------------
-                # Model
+                # MODEL
                 # ----------------------------------------------
 
-                raw_output = self._run_single(
-                    tensor
+                raw_output = (
+                    self._run_single(
+                        tensor
+                    )
                 )
 
                 # ----------------------------------------------
-                # Decode
+                # DECODE
                 # ----------------------------------------------
 
-                decoded = self.decoder.decode(
-                    raw_output,
-                    meta=meta,
+                decoded = (
+                    self.decoder.decode(
+                        raw_output,
+                        meta=meta,
+                    )
                 )
 
                 detections = decoded.get(
@@ -611,8 +854,8 @@ class GothicOCR:
                 )
 
                 # ----------------------------------------------
-                # Move boxes from tile coordinates
-                # to original image coordinates.
+                # MOVE BOXES TO ORIGINAL IMAGE
+                # COORDINATES
                 # ----------------------------------------------
 
                 for detection in detections:
@@ -621,9 +864,12 @@ class GothicOCR:
                         detection
                     )
 
-                    box = item.get("box")
+                    box = item.get(
+                        "box"
+                    )
 
                     if box is not None:
+
                         x1, y1, x2, y2 = (
                             float(box[0]),
                             float(box[1]),
@@ -638,17 +884,20 @@ class GothicOCR:
                             y2 + offset_y,
                         ]
 
-                    item["tile_index"] = index
+                    item["tile_index"] = (
+                        index
+                    )
 
                     all_detections.append(
                         item
                     )
 
                 # ----------------------------------------------
-                # Progress
+                # PROGRESS
                 # ----------------------------------------------
 
                 if progress_callback:
+
                     try:
                         progress_callback(
                             index,
@@ -668,7 +917,7 @@ class GothicOCR:
             )
 
             # ----------------------------------------------------
-            # Final text reconstruction
+            # TEXT RECONSTRUCTION
             # ----------------------------------------------------
 
             result = (
@@ -677,7 +926,10 @@ class GothicOCR:
                 )
             )
 
-            # Add useful metadata.
+            # ----------------------------------------------------
+            # METADATA
+            # ----------------------------------------------------
+
             result["image_width"] = int(
                 original_width
             )
@@ -730,9 +982,7 @@ class GothicOCR:
             return 0
 
     def cache_info(self):
-        """
-        Return basic cache statistics.
-        """
+        """Return basic cache statistics."""
 
         if self.cache is None:
             return {
@@ -745,7 +995,9 @@ class GothicOCR:
             return {
                 "enabled": True,
                 "count": self.cache.count(),
-                "size_bytes": self.cache.size_bytes(),
+                "size_bytes": (
+                    self.cache.size_bytes()
+                ),
             }
 
         except Exception:
@@ -760,9 +1012,7 @@ class GothicOCR:
     # ============================================================
 
     def close(self):
-        """
-        Release interpreter resources.
-        """
+        """Release interpreter resources."""
 
         with self._lock:
 
@@ -770,22 +1020,26 @@ class GothicOCR:
                 return
 
             try:
+
                 if self.interpreter is not None:
 
-                    # Desktop TensorFlow Lite
                     close_method = getattr(
                         self.interpreter,
                         "close",
                         None,
                     )
 
-                    if callable(close_method):
+                    if callable(
+                        close_method
+                    ):
+
                         try:
                             close_method()
                         except Exception:
                             pass
 
             finally:
+
                 self.interpreter = None
                 self._closed = True
 
