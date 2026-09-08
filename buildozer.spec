@@ -1,133 +1,46 @@
 [app]
 
-# ============================================================
-# APPLICATION
-# ============================================================
-
 title = GothicOCR
 package.name = gothicocr
 package.domain = org.gothicocr
 version = 1.0.0
 
-
-# ============================================================
-# SOURCE
-# ============================================================
-
 source.dir = .
-
-source.include_exts = py,png,jpg,jpeg,webp,ttf,tflite,json
-
+source.include_exts = py,png,jpg,jpeg,webp,ttf,tflite,json,java
 source.exclude_dirs = tests,__pycache__,.buildozer,bin,.git
 
-
-# ============================================================
-# PYTHON REQUIREMENTS
-# ============================================================
-
 requirements = python3,kivy,numpy,pillow,pyjnius
-
-
-# ============================================================
-# APPLICATION DISPLAY
-# ============================================================
 
 orientation = portrait
 fullscreen = 0
 
-
-# ============================================================
-# ANDROID PERMISSIONS
-# ============================================================
-
 android.permissions = READ_EXTERNAL_STORAGE,READ_MEDIA_IMAGES
-
-
-# ============================================================
-# ANDROID API
-# ============================================================
 
 android.api = 35
 android.minapi = 23
 
-
-# ============================================================
-# ANDROID ARCHITECTURE
-# ============================================================
-
 android.archs = arm64-v8a
 
-
-# ============================================================
-# ANDROID NDK
-# ============================================================
-
-android.ndk = 25b
-
-
-# ============================================================
-# ANDROID SDK
-# ============================================================
-
-# Prevent Buildozer from selecting an incompatible old API.
-android.accept_sdk_license = True
-
-
-# ============================================================
-# ANDROIDX
-# ============================================================
+# Use the NDK already available in CircleCI
+android.ndk = 28c
 
 android.enable_androidx = True
 
-
-# ============================================================
-# TENSORFLOW LITE
-# ============================================================
-
-# TensorFlow Lite is provided as an Android/Java dependency.
+# TensorFlow Lite Java dependency
 android.gradle_dependencies = org.tensorflow:tensorflow-lite:2.17.0
 
-
-# ============================================================
-# JAVA SOURCE
-# ============================================================
-
+# Custom Java bridge
 android.add_src = java
-
-
-# ============================================================
-# STORAGE
-# ============================================================
 
 android.private_storage = True
 
-
-# ============================================================
-# PYTHON FOR ANDROID
-# ============================================================
-
 p4a.bootstrap = sdl2
-
-p4a.branch = master
-
-
-# ============================================================
-# BUILD ARTIFACTS
-# ============================================================
 
 android.debug_artifact = apk
 android.release_artifact = aab
 
-
-# ============================================================
-# LOGCAT
-# ============================================================
-
 android.logcat_filters = *:S python:D
 
-
-# ============================================================
-# SECURITY
-# ============================================================
-
 android.allow_backup = False
+
+p4a.branch = master
