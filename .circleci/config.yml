@@ -1,0 +1,301 @@
+version: 2.1
+
+jobs:
+  build_android:
+    docker:
+      - image: cimg/android:2026.08.1-ndk
+
+    resource_class: large
+
+    working_directory: ~/project
+
+    steps:
+      # ============================================================
+      # 1. DOWNLOAD PROJECT
+      # ============================================================
+      - checkout
+
+
+      # ============================================================
+      # 2. CHECK ENVIRONMENT
+      # ============================================================
+      - run:
+          name: Check environment
+          command: |
+            set -eux
+
+            echo "===== PROJECT ====="
+            pwd
+            ls -la
+
+            echo "===== PYTHON ====="
+            python3 --version
+
+            echo "===== JAVA ====="
+            java -version
+
+            echo "===== ANDROID ====="
+            echo "ANDROID_HOME=${ANDROID_HOME:-}"
+            echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
+
+            command -v sdkmanager || true
+            command -v git || true
+
+
+      # ============================================================
+      # 3. INSTALL ALL SYSTEM DEPENDENCIES
+      # ============================================================
+      - run:
+          name: Install system dependencies
+          command: |
+            set -eux
+
+            sudo apt-get update
+
+            sudo apt-get install -y \
+              git \
+              zip \
+              unzip \
+              openjdk-17-jdk \
+              python3 \
+              python3-dev \
+              python3-pip \
+              python3-venv \
+              autoconf \
+              automake \
+              autopoint \
+              libtool \
+              pkg-config \
+              zlib1g-dev \
+              libncurses5-dev \
+              libncursesw5-dev \
+              libtinfo6 \
+              cmake \
+              libffi-dev \
+              libssl-dev \
+              gettext \
+              build-essential
+
+            java -version
+            python3 --version
+
+
+      # ============================================================
+      # 4. CREATE PYTHON BUILD ENVIRONMENT
+      # ============================================================
+      - run:
+          name: Install Buildozer and Cython
+          command: |
+            set -eux
+
+            rm -rf ~/buildozer-venv
+
+            python3 -m venv ~/buildozer-venv
+
+            source ~/buildozer-venv/bin/activate
+
+            python -m pip install --upgrade \
+              pip \
+              setuptools \
+              wheel
+
+            python -m pip install \
+              "Cython==0.29.34" \
+              "buildozer==1.6.0"
+
+            echo "===== INSTALLED PACKAGES ====="
+
+            python -m pip show Cython
+            python -m pip show buildozer
+
+            echo "===== VERIFY CYTHON ====="
+            cython --version
+
+            echo "===== VERIFY BUILDOZER ====="
+            buildozer --version
+
+
+      # ============================================================
+      # 5. VALIDATE PROJECT FILES
+      # ============================================================
+      - run:
+          name: Validate project files
+          command: |
+            set -eux
+
+            echo "===== PROJECT FILES ====="
+
+            test -f main.py
+            test -f buildozer.spec
+
+            test -f models/gothic_ocr.tflite
+            test -f data/labels.json
+            test -f fonts/NotoSansGothic-Regular.ttf
+
+            test -f services/__init__.py
+            test -f services/image_service.py
+            test -f services/model_service.py
+            test -f services/text_decoder.py
+
+            echo "All required project files found."
+
+
+      # ============================================================
+      # 6. VALIDATE PYTHON SYNTAX
+      # ============================================================
+      - run:
+          name: Validate Python syntax
+          command: |
+            set -eux
+
+            source ~/buildozer-venv/bin/activate
+
+            python -m compileall -q \
+              main.py \
+              services \
+              tests
+
+            echo "Python syntax validation successful."
+
+
+      # ============================================================
+      # 7. VALIDATE BUILDOZER
+      # ============================================================
+      - run:
+          name: Validate Buildozer
+          command: |
+            set -eux
+
+            source ~/buildozer-venv/bin/activate
+
+            command -v python
+            command -v cython
+            command -v buildozer
+
+            python --version
+            cython --version
+            buildozer --version
+
+            test -f buildozer.spec
+
+            echo "===== BUILDOZER CONFIGURATION ====="
+
+            grep -E \
+              '^(title|package.name|package.domain|version|source.dir|requirements|android.api|android.minapi|android.archs|android.ndk|p4a.branch)' \
+              buildozer.spec || true
+
+
+      # ============================================================
+      # 8. VALIDATE ANDROID SDK
+      # ============================================================
+      - run:
+          name: Validate Android SDK
+          command: |
+            set -eux
+
+            echo "ANDROID_HOME=${ANDROID_HOME:-}"
+            echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
+
+            if command -v sdkmanager >/dev/null 2>&1
+            then
+              sdkmanager --version
+            else
+              echo "WARNING: sdkmanager is not in PATH"
+            fi
+
+
+      # ============================================================
+      # 9. PRE-BUILD CHECK
+      # ============================================================
+      - run:
+          name: Final pre-build verification
+          command: |
+            set -eux
+
+            source ~/buildozer-venv/bin/activate
+
+            echo "===== FINAL TOOL CHECK ====="
+
+            python --version
+            cython --version
+            buildozer --version
+
+            echo "===== GIT ====="
+            git --version
+
+            echo "===== DISK ====="
+            df -h
+
+            echo "PRE-BUILD VALIDATION PASSED"
+
+
+      # ============================================================
+      # 10. BUILD APK
+      # ============================================================
+      - run:
+          name: Build Android APK
+          no_output_timeout: 30m
+          command: |
+            set -eux
+
+            source ~/buildozer-venv/bin/activate
+
+            echo "===== ACTIVE ENVIRONMENT ====="
+
+            command -v python
+            command -v cython
+            command -v buildozer
+
+            python --version
+            cython --version
+            buildozer --version
+
+            echo "===== START BUILD ====="
+
+            buildozer android debug
+
+
+      # ============================================================
+      # 11. VERIFY APK
+      # ============================================================
+      - run:
+          name: Verify generated APK
+          command: |
+            set -eux
+
+            echo "===== BIN DIRECTORY ====="
+
+            if [ ! -d bin ]
+            then
+              echo "ERROR: bin directory does not exist"
+              exit 1
+            fi
+
+            find bin \
+              -type f \
+              -name "*.apk" \
+              -print
+
+            APK_COUNT=$(find bin -type f -name "*.apk" | wc -l)
+
+            if [ "$APK_COUNT" -lt 1 ]
+            then
+              echo "ERROR: No APK was generated"
+              exit 1
+            fi
+
+            echo "APK BUILD SUCCESSFUL"
+
+
+      # ============================================================
+      # 12. SAVE APK
+      # ============================================================
+      - store_artifacts:
+          path: bin
+          destination: GothicOCR2-APK
+
+
+workflows:
+  build_android:
+    jobs:
+      - build_android
