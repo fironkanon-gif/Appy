@@ -10,6 +10,7 @@ jobs:
     working_directory: ~/project
 
     steps:
+
       # ============================================================
       # 1. DOWNLOAD PROJECT
       # ============================================================
@@ -38,12 +39,12 @@ jobs:
             echo "ANDROID_HOME=${ANDROID_HOME:-}"
             echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
 
-            command -v sdkmanager || true
-            command -v git || true
+            command -v sdkmanager
+            command -v git
 
 
       # ============================================================
-      # 3. INSTALL ALL SYSTEM DEPENDENCIES
+      # 3. INSTALL SYSTEM DEPENDENCIES
       # ============================================================
       - run:
           name: Install system dependencies
@@ -79,7 +80,10 @@ jobs:
               patch \
               wget
 
-            java -version
+            echo "===== JAVA 17 ====="
+            /usr/lib/jvm/java-17-openjdk-amd64/bin/java -version
+
+            echo "===== PYTHON ====="
             python3 --version
 
 
@@ -111,10 +115,7 @@ jobs:
             python -m pip show Cython
             python -m pip show buildozer
 
-            echo "===== VERIFY CYTHON ====="
             cython --version
-
-            echo "===== VERIFY BUILDOZER ====="
             buildozer --version
 
 
@@ -125,8 +126,6 @@ jobs:
           name: Validate project files
           command: |
             set -eux
-
-            echo "===== PROJECT FILES ====="
 
             test -f main.py
             test -f buildozer.spec
@@ -139,8 +138,6 @@ jobs:
             test -f services/image_service.py
             test -f services/model_service.py
             test -f services/text_decoder.py
-
-            echo "===== JAVA BRIDGE ====="
 
             test -f java/org/gothicocr/TFLiteBridge.java
 
@@ -166,94 +163,97 @@ jobs:
 
 
       # ============================================================
-      # 7. VALIDATE TFLITE CONFIGURATION
+      # 7. VALIDATE BUILDOZER CONFIGURATION
       # ============================================================
       - run:
-          name: Validate TensorFlow Lite configuration
+          name: Validate Buildozer configuration
           command: |
             set -eux
 
-            echo "===== TFLITE GRADLE DEPENDENCY ====="
-
             grep -F \
-              "org.tensorflow:tensorflow-lite" \
+              "android.ndk = 28c" \
               buildozer.spec
 
-            echo "===== JAVA SOURCE CONFIG ====="
+            grep -F \
+              "org.tensorflow:tensorflow-lite:2.17.0" \
+              buildozer.spec
 
             grep -E \
               '^android.add_src[[:space:]]*=[[:space:]]*java' \
               buildozer.spec
 
-            echo "===== TFLITE JAVA BRIDGE ====="
-
             grep -F \
               "class TFLiteBridge" \
               java/org/gothicocr/TFLiteBridge.java
 
-            echo "TensorFlow Lite configuration validated."
+            echo "Buildozer configuration validated."
 
 
       # ============================================================
-      # 8. VALIDATE BUILDOZER
+      # 8. CONFIGURE JAVA 17
       # ============================================================
       - run:
-          name: Validate Buildozer
+          name: Configure Java 17
           command: |
             set -eux
 
-            source ~/buildozer-venv/bin/activate
+            echo 'export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64' >> "$BASH_ENV"
+            echo 'export PATH=/usr/lib/jvm/java-17-openjdk-amd64/bin:$PATH' >> "$BASH_ENV"
 
-            command -v python
-            command -v cython
-            command -v buildozer
+            source "$BASH_ENV"
 
-            python --version
-            cython --version
-            buildozer --version
+            echo "JAVA_HOME=$JAVA_HOME"
 
-            test -f buildozer.spec
-
-            echo "===== BUILDOZER CONFIGURATION ====="
-
-            grep -E \
-              '^(title|package.name|package.domain|version|source.dir|source.include_exts|requirements|android.api|android.minapi|android.archs|android.ndk|android.gradle_dependencies|android.add_src|p4a.branch)' \
-              buildozer.spec || true
+            java -version
+            javac -version
 
 
       # ============================================================
-      # 9. VALIDATE ANDROID SDK
+      # 9. CONFIGURE ANDROID SDK AND NDK
       # ============================================================
       - run:
-          name: Validate Android SDK
+          name: Configure Android SDK and NDK
           command: |
             set -eux
 
-            echo "ANDROID_HOME=${ANDROID_HOME:-}"
-            echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
+            SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/home/circleci/android-sdk}}"
 
-            if command -v sdkmanager >/dev/null 2>&1
-            then
-              sdkmanager --version
-            else
-              echo "ERROR: sdkmanager is not in PATH"
-              exit 1
-            fi
+            NDK_ROOT="/home/circleci/android-sdk/ndk/28.2.13676358"
+
+            test -d "$SDK_ROOT"
+            test -d "$NDK_ROOT"
+
+            echo "export ANDROID_HOME=$SDK_ROOT" >> "$BASH_ENV"
+            echo "export ANDROID_SDK_ROOT=$SDK_ROOT" >> "$BASH_ENV"
+
+            echo "export ANDROIDSDK=$SDK_ROOT" >> "$BASH_ENV"
+            echo "export ANDROIDNDK=$NDK_ROOT" >> "$BASH_ENV"
+
+            echo "export ANDROIDAPI=35" >> "$BASH_ENV"
+            echo "export NDKAPI=23" >> "$BASH_ENV"
+
+            source "$BASH_ENV"
+
+            echo "ANDROIDSDK=$ANDROIDSDK"
+            echo "ANDROIDNDK=$ANDROIDNDK"
+
+            ls -la "$ANDROIDSDK"
+            ls -la "$ANDROIDNDK" | head
 
 
       # ============================================================
-      # 10. ACCEPT ANDROID SDK LICENSES
+      # 10. ACCEPT ANDROID LICENSES
       # ============================================================
       - run:
           name: Accept Android SDK licenses
           command: |
             set -eux
 
-            echo "===== ACCEPT ANDROID LICENSES ====="
+            source "$BASH_ENV"
 
-            yes | sdkmanager --licenses || true
+            yes | sdkmanager --licenses >/dev/null || true
 
-            echo "Android SDK licenses processed."
+            echo "Android SDK licenses accepted."
 
 
       # ============================================================
@@ -264,34 +264,18 @@ jobs:
           command: |
             set -eux
 
-            echo "===== INSTALL PLATFORM TOOLS ====="
+            source "$BASH_ENV"
 
-            sdkmanager \
-              "platform-tools"
+            yes | sdkmanager \
+              "platform-tools" \
+              "platforms;android-35" \
+              "build-tools;35.0.0"
 
-            echo "===== INSTALL ANDROID PLATFORM ====="
+            echo "===== INSTALLED SDK COMPONENTS ====="
 
-            sdkmanager \
-              "platforms;android-35"
-
-            echo "===== INSTALL BUILD TOOLS ====="
-
-            sdkmanager \
-              "build-tools;37.0.0"
-
-            echo "===== INSTALLED BUILD TOOLS ====="
-
-            SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-
-            if [ -z "$SDK_ROOT" ]
-            then
-              echo "ERROR: Android SDK path is not defined."
-              exit 1
-            fi
-
-            ls -la "$SDK_ROOT/build-tools"
-
-            echo "Android SDK packages installed."
+            ls -la "$ANDROIDSDK/platform-tools"
+            ls -la "$ANDROIDSDK/platforms/android-35"
+            ls -la "$ANDROIDSDK/build-tools/35.0.0"
 
 
       # ============================================================
@@ -302,43 +286,66 @@ jobs:
           command: |
             set -eux
 
-            SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+            source "$BASH_ENV"
 
-            echo "===== SEARCH FOR AIDL ====="
+            AIDL="$ANDROIDSDK/build-tools/35.0.0/aidl"
 
-            find "$SDK_ROOT/build-tools" \
-              -type f \
-              -name aidl \
-              -print
-
-            AIDL_PATH=$(find "$SDK_ROOT/build-tools" \
-              -type f \
-              -name aidl \
-              | head -1)
-
-            if [ -z "$AIDL_PATH" ]
+            if [ ! -f "$AIDL" ]
             then
-              echo "ERROR: AIDL was not found."
+              echo "ERROR: AIDL not found at:"
+              echo "$AIDL"
               exit 1
             fi
 
             echo "AIDL found:"
-            echo "$AIDL_PATH"
-
-            "$AIDL_PATH" --help >/dev/null 2>&1 || true
-
-            echo "AIDL verification successful."
+            echo "$AIDL"
 
 
       # ============================================================
-      # 13. VALIDATE MODEL SIZE
+      # 13. PREPARE BUILDOZER SDK/NDK PATHS
+      # ============================================================
+      - run:
+          name: Configure Buildozer Android paths
+          command: |
+            set -eux
+
+            source "$BASH_ENV"
+
+            mkdir -p ~/.buildozer/android/platform
+
+            rm -rf ~/.buildozer/android/platform/android-sdk
+            rm -rf ~/.buildozer/android/platform/android-ndk-r28c
+
+            ln -s \
+              "$ANDROIDSDK" \
+              ~/.buildozer/android/platform/android-sdk
+
+            ln -s \
+              "$ANDROIDNDK" \
+              ~/.buildozer/android/platform/android-ndk-r28c
+
+            echo "===== BUILDOZER ANDROID LINKS ====="
+
+            ls -la ~/.buildozer/android/platform
+
+            echo "===== SDK BUILD TOOLS ====="
+
+            ls -la \
+              ~/.buildozer/android/platform/android-sdk/build-tools/35.0.0
+
+            echo "===== AIDL ====="
+
+            test -f \
+              ~/.buildozer/android/platform/android-sdk/build-tools/35.0.0/aidl
+
+
+      # ============================================================
+      # 14. VALIDATE MODEL
       # ============================================================
       - run:
           name: Validate model file
           command: |
             set -eux
-
-            echo "===== MODEL FILE ====="
 
             ls -lh models/gothic_ocr.tflite
 
@@ -346,75 +353,68 @@ jobs:
 
             if [ "$MODEL_SIZE" -lt 1000 ]
             then
-              echo "ERROR: TFLite model appears invalid or empty"
+              echo "ERROR: TFLite model is empty or invalid."
               exit 1
             fi
 
-            echo "Model file validation successful."
+            echo "Model validation successful."
 
 
       # ============================================================
-      # 14. FINAL PRE-BUILD CHECK
+      # 15. FINAL PRE-BUILD CHECK
       # ============================================================
       - run:
           name: Final pre-build verification
           command: |
             set -eux
 
+            source "$BASH_ENV"
             source ~/buildozer-venv/bin/activate
 
-            echo "===== FINAL TOOL CHECK ====="
-
+            echo "===== PYTHON ====="
             python --version
+
+            echo "===== CYTHON ====="
             cython --version
+
+            echo "===== BUILDOZER ====="
             buildozer --version
 
             echo "===== JAVA ====="
             java -version
+            javac -version
 
-            echo "===== GIT ====="
-            git --version
+            echo "===== SDK ====="
+            echo "$ANDROIDSDK"
 
-            echo "===== ANDROID SDK ====="
-            echo "ANDROID_HOME=${ANDROID_HOME:-}"
-            echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
+            echo "===== NDK ====="
+            echo "$ANDROIDNDK"
 
-            echo "===== BUILD TOOLS ====="
-
-            SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-            ls -la "$SDK_ROOT/build-tools"
+            echo "===== AIDL ====="
+            test -f \
+              "$ANDROIDSDK/build-tools/35.0.0/aidl"
 
             echo "===== DISK ====="
             df -h
-
-            echo "===== PROJECT TREE ====="
-
-            find . \
-              -maxdepth 3 \
-              -type f \
-              | sort \
-              | head -200
 
             echo "PRE-BUILD VALIDATION PASSED"
 
 
       # ============================================================
-      # 15. CLEAN OLD BUILD
+      # 16. CLEAN OUTPUT
       # ============================================================
       - run:
-          name: Clean old Android build
+          name: Clean old output
           command: |
             set -eux
 
-            source ~/buildozer-venv/bin/activate
-
             rm -rf bin
 
-            echo "Old APK output removed."
+            echo "Old output removed."
 
 
       # ============================================================
-      # 16. BUILD APK
+      # 17. BUILD APK
       # ============================================================
       - run:
           name: Build Android APK
@@ -422,14 +422,19 @@ jobs:
           command: |
             set -eux
 
+            source "$BASH_ENV"
             source ~/buildozer-venv/bin/activate
 
-            echo "===== ACTIVE ENVIRONMENT ====="
+            echo "===== ACTIVE BUILD ENVIRONMENT ====="
 
-            command -v python
-            command -v cython
-            command -v buildozer
+            echo "JAVA_HOME=$JAVA_HOME"
+            echo "ANDROIDSDK=$ANDROIDSDK"
+            echo "ANDROIDNDK=$ANDROIDNDK"
+            echo "ANDROIDAPI=$ANDROIDAPI"
+            echo "NDKAPI=$NDKAPI"
 
+            java -version
+            javac -version
             python --version
             cython --version
             buildozer --version
@@ -440,20 +445,20 @@ jobs:
 
 
       # ============================================================
-      # 17. VERIFY APK
+      # 18. VERIFY APK
       # ============================================================
       - run:
           name: Verify generated APK
           command: |
             set -eux
 
-            echo "===== BIN DIRECTORY ====="
-
             if [ ! -d bin ]
             then
-              echo "ERROR: bin directory does not exist"
+              echo "ERROR: bin directory does not exist."
               exit 1
             fi
+
+            echo "===== APK FILES ====="
 
             find bin \
               -type f \
@@ -464,7 +469,7 @@ jobs:
 
             if [ "$APK_COUNT" -lt 1 ]
             then
-              echo "ERROR: No APK was generated"
+              echo "ERROR: No APK generated."
               exit 1
             fi
 
@@ -479,7 +484,7 @@ jobs:
 
 
       # ============================================================
-      # 18. SAVE APK
+      # 19. SAVE APK
       # ============================================================
       - store_artifacts:
           path: bin
